@@ -45,15 +45,22 @@ if args.chat:
         }]
     )
 
-
+if "_tanh" in args.pos or "tanh" in args.neg:
+    feature_fn = "tanh"
+elif "_elu" in args.pos or "elu" in args.neg:
+    feature_fn = "elu"
+elif "_squared" in args.pos or "squared" in args.neg:
+    feature_fn = "squared-exponential"
+else:
+    feature_fn = None
 # ────────────────── helper: encode with custom markers ─────────────────
 
 
 # ────────────────── model wrapper ─────────────────────────────────────
 ks = SEKALLM(args.model, device=args.device)
 
-print("\n=== PROMPT ===")
-print(textwrap.fill(args.prompt, 100))
+# print("\n=== PROMPT ===")
+# print(textwrap.fill(args.prompt, 100))
 
 # ids + mask with custom markers
 ids, mask = encode_with_markers(args.prompt, ks.tok,
@@ -73,13 +80,15 @@ if args.neg:
                          layers=args.layers,
                          mask_tensor=mask,
                          amplify_pos=args.amplify_pos,
-                         amplify_neg=args.amplify_neg
+                         amplify_neg=args.amplify_neg,
+                         feature_function=feature_fn
                          )
 else:
     ks.attach_projection(pos_pt=args.pos,
                          layers=args.layers,
                          mask_tensor=mask,
-                         amplify_pos=args.amplify_pos)
+                         amplify_pos=args.amplify_pos,
+                         feature_function=feature_fn)
 
 print("\n")
 steered = ks.generate(ids, max_new_tokens=args.max_new)

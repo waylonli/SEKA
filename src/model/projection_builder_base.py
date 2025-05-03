@@ -1,13 +1,3 @@
-# build_key_projection.py
-# -*- coding: utf-8 -*-
-"""
-python build_key_projection.py \
-   --model pretrained/qwen2-1.5b-chat \
-   --layers all \
-   --json   data/pair_qa.json \
-   --samples 100 \
-   --top-pct 0.97
-"""
 from __future__ import annotations
 import argparse, json, random, tqdm, torch, abc, pathlib
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -31,6 +21,7 @@ class ProjectionBuilderBase(abc.ABC):
                  *,
                  top_pct: float,
                  max_samples: int,
+                 feature_function: str | None = None,
                  device: str = "cuda"):
         self.model_path  = model_path
         self.top_pct     = top_pct
@@ -45,6 +36,7 @@ class ProjectionBuilderBase(abc.ABC):
         self.d_kv   = (self.model.config.hidden_size //
                        self.model.config.num_attention_heads *
                        self.model.config.num_key_value_heads)
+        self.feature_function = feature_function
 
     # ---------- abstract ------------------------------------------------
     @abc.abstractmethod
@@ -54,6 +46,21 @@ class ProjectionBuilderBase(abc.ABC):
         Stop anytime after `max_samples` total examples.
         """
         raise NotImplementedError
+
+    def _feature_func(self, x: torch.Tensor) -> torch.Tensor:
+        if self.feature_function is None:
+            return x
+
+        if self.feature_function == "squared-exponential":
+            return torch.exp(-x.pow(2) / 2)
+
+        if self.feature_function == "tanh":
+            return torch.tanh(x)
+
+        if self.feature_function == "elu":
+            return torch.where(x >= 0, x, torch.exp(x) - 1)
+
+        raise ValueError(f"unknown feature_function {self.feature_function}")
 
     # ---------- utilities ----------------------------------------------
     @staticmethod
@@ -85,7 +92,8 @@ class ProjectionBuilderBase(abc.ABC):
         for L in self.layers:
             h = hidd[L][0]                                    # (seq,d_model)
             k = self.model.model.layers[L].self_attn.k_proj(h)  # (seq,d_kv)
-            out.append(k[idx].float())
+            k = self._feature_func(k.float()).to(torch.float16)  # ➍ apply kernel
+            out.append(k[idx])
         return out                                            # list(len_layers)
 
     @staticmethod

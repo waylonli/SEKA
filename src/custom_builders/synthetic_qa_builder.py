@@ -65,6 +65,8 @@ if __name__ == "__main__":
     pa.add_argument('--top-pct', type=float, default=0.97)
     pa.add_argument('--chat',    action='store_true',
                       help="use chat template for context")
+    pa.add_argument('--feature-function', type=str, default=None)
+
     args = pa.parse_args()
 
     builder = SynthQABuilder(
@@ -74,8 +76,9 @@ if __name__ == "__main__":
         max_samples=args.samples,
         json_file=args.json,
         chat=args.chat,
+        feature_function=args.feature_function,
     )
     builder.run(
-        pos_out=f"projections/synthetic/{args.model.split('/')[-1]}_pos_proj.pt",
-        neg_out=f"projections/synthetic/{args.model.split('/')[-1]}_neg_proj.pt",
+        pos_out=f"projections/synthetic/{args.model.split('/')[-1]}_pos_proj.pt" if args.feature_function is None else f"projections/synthetic/{args.model.split('/')[-1]}_pos_proj_{args.feature_function}.pt",
+        neg_out=f"projections/synthetic/{args.model.split('/')[-1]}_neg_proj.pt" if args.feature_function is None else f"projections/synthetic/{args.model.split('/')[-1]}_neg_proj_{args.feature_function}.pt",
     )  # writes projections exactly as before

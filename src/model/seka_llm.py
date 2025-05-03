@@ -56,7 +56,7 @@ class SEKALLM:
                  mask_tensor: torch.Tensor | None = None,
                  **gen_kw) -> str:
         if isinstance(ids, str):
-            ids, auto_mask = encode_with_markers(txt, self.tok, self.m_start, self.m_end)
+            ids, auto_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
             mask_tensor = auto_mask if mask_tensor is None else mask_tensor
 
         ids = ids.to(self.device)
@@ -78,7 +78,9 @@ class SEKALLM:
                           layers: str = "last4",
                           mask_tensor: torch.Tensor | None = None,
                           amplify_pos: float = 0.8,
-                          amplify_neg: float = 0.2):
+                          amplify_neg: float = 0.2,
+                          feature_function: str | None = None,
+                          ):
         """
         Parameters
         ----------
@@ -115,6 +117,34 @@ class SEKALLM:
 
         m_dev = mask_tensor.to(dev) if mask_tensor is not None else None
 
+        # ---------- kernel helpers ----------
+        def phi(x: torch.Tensor) -> torch.Tensor:
+            if feature_function is None:
+                return x
+            if feature_function == "squared-exponential":
+                return torch.exp(-x.pow(2) / 2)
+            if feature_function == "tanh":
+                return torch.tanh(x)
+            if feature_function == "elu":
+                return torch.where(x >= 0, x, torch.exp(x) - 1)
+
+            raise ValueError(f"unknown feature_function {feature_function}")
+
+
+
+        def phi_inv(x: torch.Tensor) -> torch.Tensor:
+            if feature_function is None:
+                return x
+            eps = torch.full_like(x, 1e-4)
+            if feature_function == "squared-exponential":
+                return -torch.log(torch.clamp(x, min=eps)) * 2
+            if feature_function == "tanh":
+                x = torch.clamp(x, -1 + eps, 1 - eps)
+                return torch.atanh(x)
+            if feature_function == "elu":
+                pos, neg = x.clamp(min=0), x.clamp(max=0)
+            return pos + torch.log(neg + 1)
+
         # ---------- register hooks ----------
         for L in sel_layers:
             Pp = P_pos[L].to(dtype)
@@ -125,8 +155,12 @@ class SEKALLM:
                       m=m_dev, P_pos=Pp, P_neg=Pn,
                       γp=amplify_pos, γn=amplify_neg):
                 # no mask → whole sequence treated as positive only
-                if m is None:
-                    return k_out + γp * (k_out @ P_pos)
+                k_feat = phi(k_out.float())  # φ(k)
+
+                if m is None:  # un‑masked
+                    # k_mod = k_feat + γp * (k_feat @ P_pos)
+                    k_mod = k_feat @ P_pos
+                    return phi_inv(k_mod).to(k_out.dtype)
 
                 if k_out.shape[1] != m.numel():
                     return k_out
@@ -134,14 +168,18 @@ class SEKALLM:
                 sel = m.nonzero(as_tuple=False).squeeze(-1)          # positive
                 non_sel = (~m).nonzero(as_tuple=False).squeeze(-1)   # negative
 
-                if sel.numel():
-                    k_sel = k_out[:, sel, :]
-                    k_out[:, sel, :] = k_sel + γp * (k_sel @ P_pos)
+                if sel.numel():  # positive tokens
+                    k_sel = k_feat[:, sel, :]
+                    k_sel = k_sel + γp * (k_sel @ P_pos)
+                    # k_sel = k_sel @ P_pos
+                    k_out[:, sel, :] = phi_inv(k_sel).to(k_out.dtype)
                     # k_out[:, sel, :] = (k_sel @ (γp * P_pos))
 
                 if P_neg is not None and non_sel.numel():
-                    k_ns = k_out[:, non_sel, :]
-                    k_out[:, non_sel, :] = k_ns + γn * (k_ns @ P_neg)
+                    k_ns = k_feat[:, non_sel, :]
+                    k_ns = k_ns + γn * (k_ns @ P_neg)
+                    # k_ns = k_ns @ P_neg
+                    k_out[:, non_sel, :] = phi_inv(k_ns).to(k_out.dtype)
                     # k_out[:, non_sel, :] = (k_ns @ (γn * P_neg))
 
                 return k_out
@@ -150,7 +188,8 @@ class SEKALLM:
 
         tag = ("pos+neg" if P_neg is not None else "pos‑only")
         print(f"[Key‑Steering] {tag}, layers {sel_layers}, "
-              f"γ+={amplify_pos}, γ‑={amplify_neg if P_neg else 'n/a'}")
+              f"γ+={amplify_pos}, γ‑={amplify_neg if P_neg else 'n/a'}, "
+              f"kernel={feature_function or 'linear'}")
 
     def remove_projection(self):
         for h in self._hooks:
