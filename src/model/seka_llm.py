@@ -18,11 +18,11 @@ class SEKALLM:
     ids, mask = encode_with_mask("Write code. *Respond in JSON*.", ks.tok)
 
     # steer with positive projector only
-    ks.attach_projection(rel_pt="rel_proj.pt", layers="last4",
+    ks.attach_projection(pos_pt="rel_proj.pt", layers="last4",
                          mask_tensor=mask, amplify_pos=2.0)
 
     # steer with both positive and negative projectors
-    ks.attach_projection(rel_pt="rel_proj.pt", irrel_pt="irrel_proj.pt",
+    ks.attach_projection(pos_pt="rel_proj.pt", neg_pt="irrel_proj.pt",
                          layers="last4", mask_tensor=mask,
                          amplify_pos=2.0, amplify_neg=0.3)
     """
@@ -79,8 +79,8 @@ class SEKALLM:
     # ───────────── steering control ────────────────────────────────────
     def attach_projection(self,
                           *,
-                          rel_pt: str,
-                          irrel_pt: str | None = None,
+                          pos_pt: str,
+                          neg_pt: str | None = None,
                           layers: str = "last4",
                           mask_tensor: torch.Tensor | None = None,
                           amplify_pos: float = 0.8,
@@ -88,8 +88,8 @@ class SEKALLM:
         """
         Parameters
         ----------
-        rel_pt      path to the positive projector (required)
-        irrel_pt    path to negative projector; if None → positive‑only
+        pos_pt      path to the positive projector (required)
+        neg_pt    path to negative projector; if None → positive‑only
         layers      "last4" | "all" | "0,4,19" ...
         mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
         amplify_pos >1 boosts relevant keys on mask True positions
@@ -101,7 +101,7 @@ class SEKALLM:
         dtype = torch.float32                    # keep projections in fp32
 
         # ---------- load positive projector ----------
-        file_layers, P_pos_stack = _load_proj(rel_pt, dev)
+        file_layers, P_pos_stack = _load_proj(pos_pt, dev)
         sel_layers = _parse_layers(layers, n_layers)
         if file_layers is not None:
             P_pos = {L: P_pos_stack[i].T.contiguous() for i, L in enumerate(file_layers)}
@@ -109,8 +109,8 @@ class SEKALLM:
             P_pos = {L: P_pos_stack[0].T.contiguous() for L in sel_layers}
 
         # ---------- load negative projector (optional) ----------
-        if irrel_pt:
-            f_layers, P_neg_stack = _load_proj(irrel_pt, dev)
+        if neg_pt:
+            f_layers, P_neg_stack = _load_proj(neg_pt, dev)
             if f_layers is not None:
                 P_neg = {L: P_neg_stack[i].T.contiguous() for i, L in enumerate(f_layers)}
             else:
