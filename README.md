@@ -1,2 +1,2 @@
 # SEKA
-Spectral Editing Key Amplification
+Spectral Editing Key Amplification
