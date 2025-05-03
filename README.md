@@ -48,4 +48,11 @@ python src/test_inference.py --prompt "Given the context, *answer the question b
 thetic/qwen2-1.5b-chat_pos_proj_tanh.pt --model pretrained/qwen2-1.5b-chat --chat --amplify-pos 1.0 --amplify-neg 0.0
 ```
 
+### Recompute Projections
+
+```
+python src/custom_builders/synthetic_qa_builder.py \
+    --model "pretrained/qwen2-1.5b-chat" \
+    --json "./data/synthetic/pair_qa.json" \
+    --chat
 ```
