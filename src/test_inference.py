@@ -15,7 +15,7 @@ pa.add_argument('--pos', default="projections/synthetic/qwen2-1.5b-chat_pos_proj
                 help='positive (relevant) projector .pt')
 pa.add_argument('--neg', default=None,
                 help='optional negative (irrelevant) projector .pt')
-pa.add_argument('--layers', default='last4',
+pa.add_argument('--layers', default='last10',
                 help="'all' / 'last4' / '0,4,19' …")
 pa.add_argument('--prompt', required=True,
                 help='plain‑text prompt (use *…* to highlight)')
@@ -45,11 +45,11 @@ if args.chat:
         }]
     )
 
-if "_tanh" in args.pos or "tanh" in args.neg:
+if "_tanh" in args.pos:
     feature_fn = "tanh"
-elif "_elu" in args.pos or "elu" in args.neg:
+elif "_elu" in args.pos:
     feature_fn = "elu"
-elif "_squared" in args.pos or "squared" in args.neg:
+elif "_squared" in args.pos:
     feature_fn = "squared-exponential"
 else:
     feature_fn = None
