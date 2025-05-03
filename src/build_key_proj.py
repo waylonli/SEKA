@@ -1,18 +1,8 @@
-# -*- coding: utf-8 -*-
 """
-Compute per‑layer “relevant” and “irrelevant” key projections Π⁺_ℓ, Π⁻_ℓ.
-
-Saves:
-    pos_proj.pt   – positive (relevant‑key) projectors
-    neg_proj.pt – negative (irrelevant‑key) projectors
-
-Run exactly as before, no extra flags:
-
 python build_key_projection.py \
-   --model qwen2-1.5b-chat \
-   --layers 19,22,23 \
-   --json pair_qa.json \
-   --samples 2000 \
+   --model pretrained/qwen2-1.5b-chat \
+   --layers "all" \
+   --json data/pair_qa.json \
    --top-pct 0.97
 """
 import argparse, json, random, tqdm, torch
@@ -24,7 +14,7 @@ pa = argparse.ArgumentParser()
 pa.add_argument('--model',      required=True)
 pa.add_argument('--layers',     default='all',   help="comma | 'last4' | 'all'")
 pa.add_argument('--json',       required=True)
-pa.add_argument('--samples',    type=int,  default=2000)
+pa.add_argument('--samples',    type=int,  default=100)
 pa.add_argument('--top-pct',    type=float,default=0.97)
 args = pa.parse_args()
 

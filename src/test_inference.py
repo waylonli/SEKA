@@ -1,15 +1,3 @@
-# test_inference_key.py
-# -*- coding: utf-8 -*-
-"""
-Baseline vs. Spectral‑Editing Key Steering
-────────────────────────────────────────────────────────────────────────────
-Example:
-
-python test_inference_key.py \
-  --model qwen2-1.5b-chat \
-  --rel   rel_proj.pt \
-  --prompt "Write a script that prints hello. *Respond in JSON*."
-"""
 import argparse, textwrap, torch
 from src.model.seka_llm import SEKALLM
 from utils import encode_with_markers          # same helper as before
@@ -18,22 +6,24 @@ warnings.filterwarnings("ignore")
 
 # ────────── CLI ───────────────────────────────────────────────────────
 pa = argparse.ArgumentParser()
-pa.add_argument('--model',   default="pretrained/qwen2-1.5b-chat",
+pa.add_argument('--model', default="pretrained/qwen2-1.5b-chat",
                 help='HF id / local path')
-pa.add_argument('--pos',     default="projections/synthetic/pos_proj.pt",
+pa.add_argument('--pos', default="projections/synthetic/pos_proj.pt",
                 help='positive (relevant) projector .pt')
-pa.add_argument('--neg',   default=None,
+pa.add_argument('--neg', default=None,
                 help='optional negative (irrelevant) projector .pt')
-pa.add_argument('--layers',  default='last4',
+pa.add_argument('--layers', default='last4',
                 help="'all' / 'last4' / '0,4,19' …")
-pa.add_argument('--prompt',  required=True,
+pa.add_argument('--prompt', required=True,
                 help='plain‑text prompt (use *…* to highlight)')
 pa.add_argument('--marker-start', default='*',
                 help='highlight start marker (e.g. 👉 )')
-pa.add_argument('--marker-end',   default=None,
+pa.add_argument('--marker-end', default=None,
                 help='highlight end marker; defaults to same as start')
+pa.add_argument('--amplify-pos', default=0.8, type=float)
+pa.add_argument('--amplify-neg', default=0.2, type=float)
 pa.add_argument('--max-new', type=int, default=128)
-pa.add_argument('--device',  choices=['auto', 'cuda', 'mps', 'cpu'],
+pa.add_argument('--device', choices=['auto', 'cuda', 'mps', 'cpu'],
                 default='auto')
 args = pa.parse_args()
 
@@ -64,14 +54,18 @@ print(baseline)
 # ── steering ──────────────────────────────────────────────────────────
 print("\n--- steered ---")
 if args.neg:
-    ks.attach_projection(rel_pt=args.pos,
-                         irrel_pt=args.neg,
+    ks.attach_projection(pos_pt=args.pos,
+                         neg_pt=args.neg,
                          layers=args.layers,
-                         mask_tensor=mask)
+                         mask_tensor=mask,
+                         amplify_pos=args.amplify_pos,
+                         amplify_neg=args.amplify_neg
+                         )
 else:
-    ks.attach_projection(rel_pt=args.pos,
+    ks.attach_projection(pos_pt=args.pos,
                          layers=args.layers,
-                         mask_tensor=mask)
+                         mask_tensor=mask,
+                         amplify_pos=args.amplify_pos)
 
 print("\n")
 steered = ks.generate(ids, max_new_tokens=args.max_new)

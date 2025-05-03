@@ -1,9 +1,3 @@
-# Hugging‑Face‑style wrapper that supports both a *positive* (relevant)
-# and an optional *negative* (irrelevant) key‑projection.
-#
-# Positive projector  : boosts keys on the *‑starred‑* tokens.
-# Negative projector  : suppresses keys everywhere else (if supplied).
-
 from __future__ import annotations
 import torch, types
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -14,15 +8,15 @@ class SEKALLM:
     """
     Basic use
     ---------
-    ks = KeySteeredLM("qwen2-1.5b-chat")
-    ids, mask = encode_with_mask("Write code. *Respond in JSON*.", ks.tok)
+    ks = SEKALLM("pretrained/qwen2-1.5b-chat")
+    ids, mask = utils.encode_with_markers("Write code. *Respond in JSON*.", ks.tok)
 
     # steer with positive projector only
-    ks.attach_projection(pos_pt="rel_proj.pt", layers="last4",
+    ks.attach_projection(pos_pt="pos_proj.pt", layers="last4",
                          mask_tensor=mask, amplify_pos=2.0)
 
     # steer with both positive and negative projectors
-    ks.attach_projection(pos_pt="rel_proj.pt", neg_pt="irrel_proj.pt",
+    ks.attach_projection(pos_pt="pos_proj.pt", neg_pt="neg_proj.pt",
                          layers="last4", mask_tensor=mask,
                          amplify_pos=2.0, amplify_neg=0.3)
     """
@@ -89,11 +83,11 @@ class SEKALLM:
         Parameters
         ----------
         pos_pt      path to the positive projector (required)
-        neg_pt    path to negative projector; if None → positive‑only
+        neg_pt      path to negative projector; if None → positive‑only
         layers      "last4" | "all" | "0,4,19" ...
         mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
-        amplify_pos >1 boosts relevant keys on mask True positions
-        amplify_neg <1 suppresses irrelevant keys on mask False positions
+        amplify_pos boosts highlighted keys on mask True positions
+        amplify_neg suppresses irrelevant keys on mask False positions
         """
         self.remove_projection()                 # clear old hooks first
 
