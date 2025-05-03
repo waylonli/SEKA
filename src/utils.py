@@ -6,8 +6,8 @@ from transformers import AutoTokenizer, AutoModel
 # ╭──────────────────────── 1. encode_with_marker ───────────────────────╮
 def encode_with_markers(text: str,
                         tokenizer: AutoTokenizer,
-                        m_start: str,
-                        m_end: str):
+                        m_start: str = '*',
+                        m_end: str = '*') -> tuple[torch.Tensor, torch.Tensor]:
     """
     Return (input_ids[1,seq], mask[seq]) where mask marks tokens that were
     inside <m_start> ... <m_end> spans.  Markers themselves are stripped.

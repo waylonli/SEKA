@@ -36,7 +36,7 @@ class SEKALLM:
 
         self.tok   = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
         self.model = AutoModelForCausalLM.from_pretrained(
-                         model_or_path, use_cache=False, **hf_kwargs
+                         model_or_path, use_cache=True, **hf_kwargs
                      ).to(device).eval()
 
         self.m_start = marker_start
