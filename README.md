@@ -4,7 +4,7 @@ Spectral Editing Key Amplification
 ### Download Qwen/Qwen2-1.5B-Instruct
 
 ```
-huggingface-cli download Qwen/Qwen2-1.5B-Instruct --local-dir './qwen2-1.5b-chat'
+huggingface-cli download Qwen/Qwen2-1.5B-Instruct --local-dir './pretrained/qwen2-1.5b-chat'
 ```
 
 ### Tested Prompt (with Qwen/Qwen2-1.5B-Instruct)
