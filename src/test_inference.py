@@ -1,4 +1,7 @@
 import argparse, textwrap, torch
+
+from transformers import AutoTokenizer
+
 from src.model import SEKALLM
 from utils import encode_with_markers          # same helper as before
 import warnings
@@ -20,16 +23,27 @@ pa.add_argument('--marker-start', default='*',
                 help='highlight start marker (e.g. 👉 )')
 pa.add_argument('--marker-end', default=None,
                 help='highlight end marker; defaults to same as start')
-pa.add_argument('--amplify-pos', default=0.8, type=float)
-pa.add_argument('--amplify-neg', default=0.2, type=float)
+pa.add_argument('--amplify-pos', default=1.5, type=float)
+pa.add_argument('--amplify-neg', default=0.5, type=float)
 pa.add_argument('--max-new', type=int, default=128)
 pa.add_argument('--device', choices=['auto', 'cuda', 'mps', 'cpu'],
                 default='auto')
+pa.add_argument('--chat', action='store_true')
 args = pa.parse_args()
 
 
 if args.marker_end is None:
     args.marker_end = args.marker_start
+
+if args.chat:
+    # apply chat-template to prompt
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    chat_prompt = tokenizer.apply_chat_template(
+        [{
+            "role": "user",
+            "content": args.prompt
+        }]
+    )
 
 
 # ────────────────── helper: encode with custom markers ─────────────────

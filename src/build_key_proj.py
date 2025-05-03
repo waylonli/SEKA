@@ -111,8 +111,8 @@ for ℓ, (pos, neg) in enumerate(zip(rel_buf, irrel_buf)):
 rel_proj   = torch.stack(rel_proj_stack)    # (L,d,d)
 irrel_proj = torch.stack(irrel_proj_stack)
 
-torch.save({'layers': LAYERS, 'proj': rel_proj.cpu()},   'projections/synthetic/pos_proj.pt')
-torch.save({'layers': LAYERS, 'proj': irrel_proj.cpu()}, 'projections/synthetic/neg_proj.pt')
+torch.save({'layers': LAYERS, 'proj': rel_proj.cpu()},   f'projections/synthetic/{args.model.split('/')[-1]}_pos_proj.pt')
+torch.save({'layers': LAYERS, 'proj': irrel_proj.cpu()}, f'projections/synthetic/{args.model.split('/')[-1]}_neg_proj.pt')
 
 print("✓ saved pos_proj.pt",   tuple(rel_proj.shape))
 print("✓ saved neg_proj.pt", tuple(irrel_proj.shape))

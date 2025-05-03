@@ -11,6 +11,7 @@ python build_key_projection.py \
 from __future__ import annotations
 import argparse, json, random, tqdm, torch, abc, pathlib
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from tqdm import tqdm
 torch.set_grad_enabled(False)
 
 
@@ -52,7 +53,7 @@ class ProjectionBuilderBase(abc.ABC):
         Yield (context, positive_span, negative_span) strings.
         Stop anytime after `max_samples` total examples.
         """
-        ...
+        raise NotImplementedError
 
     # ---------- utilities ----------------------------------------------
     @staticmethod
@@ -65,9 +66,9 @@ class ProjectionBuilderBase(abc.ABC):
         return [int(x) for x in spec.split(',')]
 
     def _span_ids(self, text: str, sub: str):
-        if sub not in text:
+        if sub.lower() not in text.lower():
             return None
-        a, b = text.index(sub), text.index(sub) + len(sub)
+        a, b = text.lower().index(sub.lower()), text.lower().index(sub.lower()) + len(sub)
         offs = self.tok(text,
                         return_offsets_mapping=True,
                         add_special_tokens=False)["offset_mapping"]
@@ -102,7 +103,7 @@ class ProjectionBuilderBase(abc.ABC):
         pos_buf = [ [] for _ in self.layers ]
         neg_buf = [ [] for _ in self.layers ]
 
-        for i, (ctx, pos_span, neg_span) in enumerate(self.iter_examples()):
+        for i, (ctx, pos_span, neg_span) in tqdm(enumerate(self.iter_examples()), total=min(len(self.data), self.max_samples)):
             if i >= self.max_samples:
                 break
 

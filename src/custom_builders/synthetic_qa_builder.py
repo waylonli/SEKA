@@ -7,6 +7,8 @@ from src.model import ProjectionBuilderBase
 import json
 import random
 import argparse
+# set random seed
+random.seed(42)
 
 # ─────────────────── DATASET‑SPECIFIC BUILDER ─────────────────────────
 class SynthQABuilder(ProjectionBuilderBase):
@@ -18,10 +20,11 @@ class SynthQABuilder(ProjectionBuilderBase):
        • question
     """
 
-    def __init__(self, *, json_file: str, **kwargs):
+    def __init__(self, *, json_file: str, chat: bool, **kwargs):
         super().__init__(**kwargs)
         with open(json_file) as f:
             self.data = json.load(f)
+        self.chat = chat
         random.shuffle(self.data)
 
     def iter_examples(self):
@@ -31,9 +34,23 @@ class SynthQABuilder(ProjectionBuilderBase):
             irrel_ctx = ex["irrelevant_context"]
             q         = ex["question"]
 
-            ctx = (f"{rel_ctx}\n{irrel_ctx}\nQuestion: {q}"
-                   if random.random() < .5
-                   else f"{irrel_ctx}\n{rel_ctx}\nQuestion: {q}")
+            if not self.chat:
+                ctx = (f"{rel_ctx}\n{irrel_ctx}\nQuestion: {q}\nAnswer: {rel_tok}"
+                       if random.random() < .5
+                       else f"{irrel_ctx}\n{rel_ctx}\nQuestion: {q}\nAnswer: {rel_tok}")
+            else:
+                tokens = self.tok.apply_chat_template(
+                    [{
+                        "role": "user",
+                        "content": f"{rel_ctx}\n{irrel_ctx}\nQuestion: {q}"
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Answer: " + rel_tok
+                    }
+                    ],
+                )
+                ctx = self.tok.decode(tokens, skip_special_tokens=False)
 
             yield ctx, rel_tok, irrel_ctx
 
@@ -46,6 +63,8 @@ if __name__ == "__main__":
     pa.add_argument('--json',    required=True)
     pa.add_argument('--samples', type=int, default=100)
     pa.add_argument('--top-pct', type=float, default=0.97)
+    pa.add_argument('--chat',    action='store_true',
+                      help="use chat template for context")
     args = pa.parse_args()
 
     builder = SynthQABuilder(
@@ -53,7 +72,8 @@ if __name__ == "__main__":
         layers=args.layers,
         top_pct=args.top_pct,
         max_samples=args.samples,
-        json_file=args.json
+        json_file=args.json,
+        chat=args.chat,
     )
     builder.run(
         pos_out=f"projections/synthetic/{args.model.split('/')[-1]}_pos_proj.pt",

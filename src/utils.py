@@ -50,6 +50,7 @@ def _parse_layers(spec: str, total: int):
         k = int(spec[4:]);   return list(range(total - k, total))
     if spec.startswith('first'):
         k = int(spec[5:]);   return list(range(k))
+    print(f"[Key-Steering] using layers: {spec}")
     return [int(i) for i in spec.split(',')]
 
 

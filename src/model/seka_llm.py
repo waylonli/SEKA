@@ -92,6 +92,7 @@ class SEKALLM:
         self.remove_projection()                 # clear old hooks first
 
         dev, n_layers = self.device, len(self.model.model.layers)
+
         dtype = torch.float32                    # keep projections in fp32
 
         # ---------- load positive projector ----------
@@ -136,10 +137,12 @@ class SEKALLM:
                 if sel.numel():
                     k_sel = k_out[:, sel, :]
                     k_out[:, sel, :] = k_sel + γp * (k_sel @ P_pos)
+                    # k_out[:, sel, :] = (k_sel @ (γp * P_pos))
 
                 if P_neg is not None and non_sel.numel():
                     k_ns = k_out[:, non_sel, :]
                     k_out[:, non_sel, :] = k_ns + γn * (k_ns @ P_neg)
+                    # k_out[:, non_sel, :] = (k_ns @ (γn * P_neg))
 
                 return k_out
 
