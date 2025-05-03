@@ -1,2 +1,2 @@
-# SERA
-Spectral Editing for Relevance Amplification
+# SEKA
+Spectral Editing Key Amplification
