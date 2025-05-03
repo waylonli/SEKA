@@ -1,5 +1,5 @@
 import argparse, textwrap, torch
-from src.model.seka_llm import SEKALLM
+from src.model import SEKALLM
 from utils import encode_with_markers          # same helper as before
 import warnings
 warnings.filterwarnings("ignore")
@@ -8,7 +8,7 @@ warnings.filterwarnings("ignore")
 pa = argparse.ArgumentParser()
 pa.add_argument('--model', default="pretrained/qwen2-1.5b-chat",
                 help='HF id / local path')
-pa.add_argument('--pos', default="projections/synthetic/pos_proj.pt",
+pa.add_argument('--pos', default="projections/synthetic/qwen2-1.5b-chat_pos_proj.pt",
                 help='positive (relevant) projector .pt')
 pa.add_argument('--neg', default=None,
                 help='optional negative (irrelevant) projector .pt')
