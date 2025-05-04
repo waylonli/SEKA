@@ -21,6 +21,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import accuracy_score, f1_score, matthews_corrcoef
 from tqdm.auto import tqdm
 
+from src.utils import encode_with_markers
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROMPT_PREFIX = "The following is an excerpt from a Wikipedia article:\n\n"
@@ -110,8 +112,11 @@ def counterfact_evaluate(
         The evaluation results, one per entry in the dataset.
 
     """
-    mt.eval_()
-    mt.to_(device)
+    try:
+        mt.eval_()
+        mt.to_(device)
+    except:
+        pass
     include_target_probs = "target_mediated" in dataset.column_names
     if desc is None:
         desc = f"Evaluate CounterFact"
@@ -203,6 +208,12 @@ def counterfact_evaluate(
                     offsets_mapping=prompt_offset_mapping
                 ) as steered_model: 
                     outputs = steered_model.generate(**inputs, **generate_kwargs)
+            elif hasattr(mt.model, "attach_projection"):
+                # print(f"Applying SEKA steering")
+                assert add_marker is not None, "SEKA steering requires markers."
+                ids, steering_mask, attention_mask = encode_with_markers(prompt, tokenizer=mt.model.tok, m_start=add_marker, m_end=add_marker)
+                mt.model.attach_projection(steer_mask_tensor=steering_mask, silence=True)
+                outputs = mt.model.generate(ids=ids, attention_mask=attention_mask, return_raw=True, **generate_kwargs)
             else:
                 outputs = mt.model.generate(**inputs, **generate_kwargs)
             

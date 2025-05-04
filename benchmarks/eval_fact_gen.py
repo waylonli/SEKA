@@ -11,6 +11,7 @@ from typing import cast
 from benchmarks.pasta_bench import benchmarks, data, models, precompute
 from benchmarks.pasta_bench.utils import experiment_utils, logging_utils
 from pastalib import pasta
+from src.model import SEKALLM
 
 import torch
 import torch.utils.data
@@ -60,19 +61,21 @@ def main(args: argparse.Namespace) -> None:
 
     # Initialize the model and tokenizer 
     device = args.device or "cuda" if torch.cuda.is_available() else "cpu"
-    mt = models.load_model(args.model, device=device, fp16=args.fp16)
-    # Set up the PASTA steerer 
+
+    mt = models.load_model(args.model, device=device, fp16=args.fp16, args=args)
+    # Set up the PASTA steerer
     if args.apply_pasta:
         head_config = experiment_utils.read_head_config(args.pasta_head_config)
         pasta_steerer = pasta.PASTA(
-            mt.model, 
+            mt.model,
             mt.tokenizer,
-            head_config=head_config, 
-            alpha=args.alpha, 
+            head_config=head_config,
+            alpha=args.alpha,
             scale_position=args.scale_position,
         )
     else:
         pasta_steerer = None
+
 
     # Set up the evaluation data 
     logger.info("loading several data sources")
@@ -99,6 +102,7 @@ def main(args: argparse.Namespace) -> None:
 
     # Set up the benchmark arguments 
     benchmark_kwargs: dict = dict(dataset=dataset, device=device)
+
     benchmark_kwargs["mt"] = mt
     benchmark_kwargs["pasta_steerer"] = pasta_steerer 
     output_dir = "{pasta}".format(
@@ -181,6 +185,7 @@ if __name__ == "__main__":
         help="benchmarks to run, defaults depend on dataset",
     )
     models.add_model_args(parser)
+    models.add_seka_args(parser)
     precompute.add_preprocessing_args(parser)
     experiment_utils.add_experiment_args(parser)
     logging_utils.add_logging_args(parser)

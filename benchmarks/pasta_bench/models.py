@@ -196,7 +196,8 @@ def map_to(
 def load_model(
     name: str, 
     device: Optional[Device] = None, 
-    fp16: Optional[bool] = None, 
+    fp16: Optional[bool] = None,
+    args: Optional[argparse.Namespace] = None,
 ) -> ModelAndTokenizer:
     """Load the model given its string name.
 
@@ -209,41 +210,67 @@ def load_model(
         ModelAndTokenizer: Loaded model and its tokenizer.
 
     """
-    if name == GPT_J_NAME_SHORT:
-        name = GPT_J_NAME
-    elif name == GPT_NEO_X_NAME_SHORT:
-        name = GPT_NEO_X_NAME
+    if not args.apply_seka:
+        if name == GPT_J_NAME_SHORT:
+            name = GPT_J_NAME
+        elif name == GPT_NEO_X_NAME_SHORT:
+            name = GPT_NEO_X_NAME
 
-    is_gpt_j_variant = name == GPT_J_NAME or GPT_J_NAME_SHORT in name
-    is_neo_x_variant = name == GPT_NEO_X_NAME or GPT_NEO_X_NAME_SHORT in name
-    if fp16 is None:
-        fp16 = is_gpt_j_variant or is_neo_x_variant
-    torch_dtype = torch.float16 if fp16 else None
-    model_kwargs: dict = dict(torch_dtype=torch_dtype)
-    if name == GPT_J_NAME or GPT_J_NAME_SHORT in name:
-        model_kwargs["low_cpu_mem_usage"] = True
-        if fp16:
-            model_kwargs["revision"] = "float16"
-    if "llama" in name:
-        model_kwargs["torch_dtype"] = torch.bfloat16 
-    if device=="auto":
-        model_kwargs["device_map"] = "auto"
-        model_kwargs["torch_dtype"] = torch.bfloat16 
+        is_gpt_j_variant = name == GPT_J_NAME or GPT_J_NAME_SHORT in name
+        is_neo_x_variant = name == GPT_NEO_X_NAME or GPT_NEO_X_NAME_SHORT in name
+        if fp16 is None:
+            fp16 = is_gpt_j_variant or is_neo_x_variant
+        torch_dtype = torch.float16 if fp16 else None
+        model_kwargs: dict = dict(torch_dtype=torch_dtype)
+        if name == GPT_J_NAME or GPT_J_NAME_SHORT in name:
+            model_kwargs["low_cpu_mem_usage"] = True
+            if fp16:
+                model_kwargs["revision"] = "float16"
+        if "llama" in name:
+            model_kwargs["torch_dtype"] = torch.bfloat16
+        if device=="auto":
+            model_kwargs["device_map"] = "auto"
+            model_kwargs["torch_dtype"] = torch.bfloat16
 
-    logger.info(f"loading {name} (device={device}, fp16={fp16})")
+        logger.info(f"loading {name} (device={device}, fp16={fp16})")
 
-    config = transformers.AutoConfig.from_pretrained(name)
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        name, config=config, **model_kwargs
-    )
+        config = transformers.AutoConfig.from_pretrained(name)
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            name, config=config, **model_kwargs
+        )
 
-    if is_neo_x_variant:
-        model.to(torch_dtype)
-    if device != "auto":
-        model.to(device).eval()
+        if is_neo_x_variant:
+            model.to(torch_dtype)
+        if device != "auto":
+            model.to(device).eval()
 
-    tokenizer = transformers.AutoTokenizer.from_pretrained(name)
-    tokenizer.pad_token = tokenizer.eos_token
+        tokenizer = transformers.AutoTokenizer.from_pretrained(name)
+        tokenizer.pad_token = tokenizer.eos_token
+    else:
+        from src.model import SEKALLM
+        if "_tanh" in args.seka_pos:
+            feature_fn = "tanh"
+        elif "_elu" in args.seka_pos:
+            feature_fn = "elu"
+        elif "_squared" in args.seka_pos:
+            feature_fn = "squared-exponential"
+        else:
+            feature_fn = None
+
+        model = SEKALLM(
+            model_or_path=args.model,
+            device=device,
+            pos_pt=args.seka_pos,
+            neg_pt=args.seka_neg,
+            layers=args.seka_layers,
+            amplify_pos=args.seka_amplify_pos,
+            amplify_neg=args.seka_amplify_neg,
+            feature_function=feature_fn,
+            marker_start=args.add_marker,
+            marker_end=args.add_marker,
+        )
+        tokenizer = model.tok
+        tokenizer.pad_token = tokenizer.eos_token
 
     return ModelAndTokenizer(model, tokenizer)
 
@@ -267,3 +294,46 @@ def add_model_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--device", help="device to train on")
     parser.add_argument("--fp16", type=bool, help="set whether to use fp16")
+
+def add_seka_args(parser: argparse.ArgumentParser) -> None:
+    """Add args needed to load a SEKA model.
+
+    The args include:
+        --seka_pos: Path to the positive projector.
+        --seka_neg: Path to the negative projector.
+        --seka_layers: Layers to apply the projector to.
+        --seka_amplify_pos: Amplification factor for the positive projector.
+        --seka_amplify_neg: Amplification factor for the negative projector.
+    """
+    parser.add_argument(
+        "--apply-seka",
+        action="store_true",)
+    parser.add_argument(
+        "--seka-pos",
+        type=str,
+        help="Path to the positive projector.",
+    )
+    parser.add_argument(
+        "--seka-neg",
+        type=str,
+        default=None,
+        help="Path to the negative projector.",
+    )
+    parser.add_argument(
+        "--seka-layers",
+        type=str,
+        default="last10",
+        help="Layers to apply the projector to.",
+    )
+    parser.add_argument(
+        "--seka-amplify-pos",
+        type=float,
+        default=1.0,
+        help="Amplification factor for the positive projector.",
+    )
+    parser.add_argument(
+        "--seka-amplify-neg",
+        type=float,
+        default=0.5,
+        help="Amplification factor for the negative projector.",
+    )

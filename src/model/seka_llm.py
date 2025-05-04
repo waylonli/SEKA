@@ -28,19 +28,34 @@ class SEKALLM:
                  device: str | None = "auto",
                  marker_start: str = "*",
                  marker_end: str | None = None,
-                 **hf_kwargs):
+                 pos_pt: str = None,
+                 neg_pt: str | None = None,
+                 layers: str = "last4",
+                 amplify_pos: float = 0.8,
+                 amplify_neg: float = 0.2,
+                 feature_function: str | None = None,
+                 **hf_kwargs
+                 ):
         if device == "auto":
             device = ("cuda" if torch.cuda.is_available()
                       else "mps" if torch.backends.mps.is_available()
                       else "cpu")
 
-        self.tok   = AutoTokenizer.from_pretrained(model_or_path , **hf_kwargs)
+        self.name_or_path = f"SEKA-{model_or_path}"
+        self.tok = AutoTokenizer.from_pretrained(model_or_path , **hf_kwargs)
         self.model = AutoModelForCausalLM.from_pretrained(
-                         model_or_path, use_cache=True, **hf_kwargs
+                         model_or_path, use_cache=False, **hf_kwargs
                      ).to(device).eval()
 
         self.m_start = marker_start
-        self.m_end   = marker_start if marker_end is None else marker_end
+        self.m_end = marker_start if marker_end is None else marker_end
+
+        self.pos_pt = pos_pt
+        self.neg_pt = neg_pt
+        self.layers = layers
+        self.amplify_pos = amplify_pos
+        self.amplify_neg = amplify_neg
+        self.feature_function = feature_function
 
         self._hooks: list[torch.utils.hooks.RemovableHandle] = []
         # transparently expose everything from the HF model
@@ -54,6 +69,7 @@ class SEKALLM:
     def generate(self,
                  ids: torch.LongTensor | str,
                  attention_mask: torch.Tensor | None = None,
+                 return_raw: bool = False,
                  **gen_kw) -> str:
         if isinstance(ids, str):
             ids, auto_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
@@ -66,36 +82,35 @@ class SEKALLM:
 
         out = self.model.generate(
                   ids,
-                  max_new_tokens=gen_kw.pop("max_new_tokens", 128),
-                  pad_token_id=self.tok.eos_token_id,
-                  do_sample=False, temperature=0.0,
-                  attention_mask=attention_mask,
                   **gen_kw
               )
-        return self.tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True)
+        return self.tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True) if not return_raw else out
 
     # ───────────── steering control ────────────────────────────────────
     def attach_projection(self,
-                          *,
-                          pos_pt: str,
-                          neg_pt: str | None = None,
-                          layers: str = "last4",
                           steer_mask_tensor: torch.Tensor | None = None,
-                          amplify_pos: float = 0.8,
-                          amplify_neg: float = 0.2,
+                          pos_pt: str = None,
+                          neg_pt: str | None = None,
+                          layers: str = None,
+                          amplify_pos: float = None,
+                          amplify_neg: float = None,
                           feature_function: str | None = None,
+                          silence: bool = False
                           ):
         """
         Parameters
         ----------
-        pos_pt      path to the positive projector (required)
-        neg_pt      path to negative projector; if None → positive‑only
-        layers      "last4" | "all" | "0,4,19" ...
         steer_mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
-        amplify_pos boosts highlighted keys on mask True positions
-        amplify_neg suppresses irrelevant keys on mask False positions
         """
         self.remove_projection()                 # clear old hooks first
+
+        # assign defaults
+        pos_pt = self.pos_pt if pos_pt is None else pos_pt
+        neg_pt = self.neg_pt if neg_pt is None else neg_pt
+        layers = self.layers if layers is None else layers
+        amplify_pos = self.amplify_pos if amplify_pos is None else amplify_pos
+        amplify_neg = self.amplify_neg if amplify_neg is None else amplify_neg
+        feature_function = self.feature_function if feature_function is None else feature_function
 
         dev, n_layers = self.device, len(self.model.model.layers)
 
@@ -191,11 +206,22 @@ class SEKALLM:
             self._hooks.append(k_lin.register_forward_hook(_hook, prepend=True))
 
         tag = ("pos+neg" if P_neg is not None else "pos‑only")
-        print(f"[Key‑Steering] {tag}, layers {sel_layers}, "
-              f"γ+={amplify_pos}, γ‑={amplify_neg if P_neg else 'n/a'}, "
-              f"kernel={feature_function or 'linear'}")
+
+        if not silence:
+            print(f"[Key‑Steering] {tag}, layers {sel_layers}, "
+                  f"γ+={amplify_pos}, γ‑={amplify_neg if P_neg else 'n/a'}, "
+                  f"kernel={feature_function or 'linear'}")
 
     def remove_projection(self):
         for h in self._hooks:
             h.remove()
         self._hooks.clear()
+
+    def eval(self):
+        pass
+
+    def train(self):
+        pass
+
+    def to(self, device):
+        pass

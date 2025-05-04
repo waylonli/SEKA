@@ -35,9 +35,10 @@ args = pa.parse_args()
 if args.marker_end is None:
     args.marker_end = args.marker_start
 
+tokenizer = AutoTokenizer.from_pretrained(args.model)
+
 if args.chat:
     # apply chat-template to prompt
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
     chat_prompt = tokenizer.apply_chat_template(
         [{
             "role": "user",
@@ -91,7 +92,13 @@ else:
                          feature_function=feature_fn)
 
 print("\n")
-steered = ks.generate(ids, max_new_tokens=args.max_new, attention_mask=attention_mask)
+steered = ks.generate(
+    ids,
+    max_new_tokens=args.max_new,
+    attention_mask=attention_mask,
+    pad_token_id=tokenizer.eos_token_id,
+    do_sample=False, temperature=0.0,
+)
 print(steered)
 
 ks.remove_projection()          # tidy up

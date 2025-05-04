@@ -8,6 +8,7 @@ def encode_with_markers(text: str,
                         tokenizer: AutoTokenizer,
                         m_start: str = '*',
                         m_end: str = '*') -> tuple[torch.Tensor, torch.Tensor]:
+    # TODO 弄成batch的形式，加快benchmark速度，SEKALLM里的generate也需要修改
     """
     Return (input_ids[1,seq], mask[seq]) where mask marks tokens that were
     inside <m_start> ... <m_end> spans.  Markers themselves are stripped.
