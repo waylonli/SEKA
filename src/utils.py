@@ -31,14 +31,15 @@ def encode_with_markers(text: str,
                     return_offsets_mapping=True,
                     add_special_tokens=False)
     ids  = torch.tensor([enc['input_ids']])
-    mask = torch.zeros(len(enc['input_ids']), dtype=torch.bool)
+    steering_mask = torch.zeros(len(enc['input_ids']), dtype=torch.bool)
+    attention_mask = torch.tensor(enc['attention_mask'])
 
     for s_char, e_char in spans:
         for tid, (cs, ce) in enumerate(enc['offset_mapping']):
             if cs >= s_char and ce <= e_char:
-                mask[tid] = True
+                steering_mask[tid] = True
 
-    return ids, mask
+    return ids, steering_mask, attention_mask
 
 
 

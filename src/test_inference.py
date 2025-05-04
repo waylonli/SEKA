@@ -63,12 +63,12 @@ ks = SEKALLM(args.model, device=args.device)
 # print(textwrap.fill(args.prompt, 100))
 
 # ids + mask with custom markers
-ids, mask = encode_with_markers(args.prompt, ks.tok,
+ids, steering_mask, attention_mask = encode_with_markers(args.prompt, ks.tok,
                                 args.marker_start, args.marker_end)
 ids = ids.to(ks.device)
 
 # ── baseline ──────────────────────────────────────────────────────────
-baseline = ks.generate(ids, max_new_tokens=args.max_new)
+baseline = ks.generate(ids, max_new_tokens=args.max_new, attention_mask=attention_mask)
 print("\n--- baseline ---")
 print(baseline)
 
@@ -78,7 +78,7 @@ if args.neg:
     ks.attach_projection(pos_pt=args.pos,
                          neg_pt=args.neg,
                          layers=args.layers,
-                         mask_tensor=mask,
+                         steer_mask_tensor=steering_mask,
                          amplify_pos=args.amplify_pos,
                          amplify_neg=args.amplify_neg,
                          feature_function=feature_fn
@@ -86,12 +86,12 @@ if args.neg:
 else:
     ks.attach_projection(pos_pt=args.pos,
                          layers=args.layers,
-                         mask_tensor=mask,
+                         steer_mask_tensor=steering_mask,
                          amplify_pos=args.amplify_pos,
                          feature_function=feature_fn)
 
 print("\n")
-steered = ks.generate(ids, max_new_tokens=args.max_new)
+steered = ks.generate(ids, max_new_tokens=args.max_new, attention_mask=attention_mask)
 print(steered)
 
 ks.remove_projection()          # tidy up

@@ -13,11 +13,11 @@ class SEKALLM:
 
     # steer with positive projector only
     ks.attach_projection(pos_pt="pos_proj.pt", layers="last4",
-                         mask_tensor=mask, amplify_pos=2.0)
+                         steer_mask_tensor=mask, amplify_pos=2.0)
 
     # steer with both positive and negative projectors
     ks.attach_projection(pos_pt="pos_proj.pt", neg_pt="neg_proj.pt",
-                         layers="last4", mask_tensor=mask,
+                         layers="last4", steer_mask_tensor=mask,
                          amplify_pos=2.0, amplify_neg=0.3)
     """
 
@@ -34,7 +34,7 @@ class SEKALLM:
                       else "mps" if torch.backends.mps.is_available()
                       else "cpu")
 
-        self.tok   = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
+        self.tok   = AutoTokenizer.from_pretrained(model_or_path , **hf_kwargs)
         self.model = AutoModelForCausalLM.from_pretrained(
                          model_or_path, use_cache=True, **hf_kwargs
                      ).to(device).eval()
@@ -53,19 +53,23 @@ class SEKALLM:
 
     def generate(self,
                  ids: torch.LongTensor | str,
-                 mask_tensor: torch.Tensor | None = None,
+                 attention_mask: torch.Tensor | None = None,
                  **gen_kw) -> str:
         if isinstance(ids, str):
-            ids, auto_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
-            mask_tensor = auto_mask if mask_tensor is None else mask_tensor
+            ids, auto_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
 
         ids = ids.to(self.device)
+
+        if attention_mask is not None:
+            attention_mask = attention_mask.unsqueeze(0) if attention_mask.ndim == 1 else attention_mask
+            attention_mask = attention_mask.to(self.device)
 
         out = self.model.generate(
                   ids,
                   max_new_tokens=gen_kw.pop("max_new_tokens", 128),
                   pad_token_id=self.tok.eos_token_id,
                   do_sample=False, temperature=0.0,
+                  attention_mask=attention_mask,
                   **gen_kw
               )
         return self.tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True)
@@ -76,7 +80,7 @@ class SEKALLM:
                           pos_pt: str,
                           neg_pt: str | None = None,
                           layers: str = "last4",
-                          mask_tensor: torch.Tensor | None = None,
+                          steer_mask_tensor: torch.Tensor | None = None,
                           amplify_pos: float = 0.8,
                           amplify_neg: float = 0.2,
                           feature_function: str | None = None,
@@ -87,7 +91,7 @@ class SEKALLM:
         pos_pt      path to the positive projector (required)
         neg_pt      path to negative projector; if None → positive‑only
         layers      "last4" | "all" | "0,4,19" ...
-        mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
+        steer_mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
         amplify_pos boosts highlighted keys on mask True positions
         amplify_neg suppresses irrelevant keys on mask False positions
         """
@@ -115,7 +119,7 @@ class SEKALLM:
         else:
             P_neg = None
 
-        m_dev = mask_tensor.to(dev) if mask_tensor is not None else None
+        m_dev = steer_mask_tensor.to(dev) if steer_mask_tensor is not None else None
 
         # ---------- kernel helpers ----------
         def phi(x: torch.Tensor) -> torch.Tensor:
