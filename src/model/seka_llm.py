@@ -42,7 +42,7 @@ class SEKALLM:
                       else "cpu")
 
         self.name_or_path = f"SEKA-{model_or_path}"
-        self.tok = AutoTokenizer.from_pretrained(model_or_path , **hf_kwargs)
+        self.tok = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
         self.model = AutoModelForCausalLM.from_pretrained(
                          model_or_path, use_cache=False, **hf_kwargs
                      ).to(device).eval()
@@ -68,11 +68,15 @@ class SEKALLM:
 
     def generate(self,
                  ids: torch.LongTensor | str,
+                 steer: bool = True,
                  attention_mask: torch.Tensor | None = None,
                  return_raw: bool = False,
                  **gen_kw) -> str:
-        if isinstance(ids, str):
-            ids, auto_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
+
+        # TODO Seems there are some bugs for the batch decoding, check steer mask and projection multiplication
+        steer_mask = None
+        if isinstance(ids, (str, list)):
+            ids, steer_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
 
         ids = ids.to(self.device)
 
@@ -80,31 +84,47 @@ class SEKALLM:
             attention_mask = attention_mask.unsqueeze(0) if attention_mask.ndim == 1 else attention_mask
             attention_mask = attention_mask.to(self.device)
 
+        # -------- optional steering --------
+        if steer:
+            self.attach_projection(steer_mask_tensor=steer_mask, silence=True)
+        else:
+            self.remove_projection()
+
         out = self.model.generate(
-                  ids,
-                  **gen_kw
-              )
-        return self.tok.decode(out[0, ids.shape[-1]:], skip_special_tokens=True) if not return_raw else out
+            ids,
+            **gen_kw
+        )
+
+        if steer:
+            self.remove_projection()
+
+        if return_raw:
+            return out
+
+        generated = []
+        for i in range(ids.size(0)):
+            generated.append(
+                self.tok.decode(out[i, ids.size(1):], skip_special_tokens=True)
+            )
+
+        return generated[0] if len(generated) == 1 else generated
+
+
 
     # ───────────── steering control ────────────────────────────────────
     def attach_projection(self,
-                          steer_mask_tensor: torch.Tensor | None = None,
-                          pos_pt: str = None,
-                          neg_pt: str | None = None,
-                          layers: str = None,
-                          amplify_pos: float = None,
-                          amplify_neg: float = None,
-                          feature_function: str | None = None,
-                          silence: bool = False
-                          ):
-        """
-        Parameters
-        ----------
-        steer_mask_tensor BoolTensor(seq,) where True marks *highlighted* tokens
-        """
-        self.remove_projection()                 # clear old hooks first
+                          steer_mask_tensor=None,
+                          pos_pt=None,
+                          neg_pt=None,
+                          layers=None,
+                          amplify_pos=None,
+                          amplify_neg=None,
+                          feature_function=None,
+                          silence=False):
 
-        # assign defaults
+        self.remove_projection()  # clear old hooks
+
+        # ----- defaults -------------------------------------------------
         pos_pt = self.pos_pt if pos_pt is None else pos_pt
         neg_pt = self.neg_pt if neg_pt is None else neg_pt
         layers = self.layers if layers is None else layers
@@ -113,10 +133,9 @@ class SEKALLM:
         feature_function = self.feature_function if feature_function is None else feature_function
 
         dev, n_layers = self.device, len(self.model.model.layers)
+        dtype = torch.float32
 
-        dtype = torch.float32                    # keep projections in fp32
-
-        # ---------- load positive projector ----------
+        # ----- load projectors -----------------------------------------
         file_layers, P_pos_stack = _load_proj(pos_pt, dev)
         sel_layers = _parse_layers(layers, n_layers)
         if file_layers is not None:
@@ -124,7 +143,6 @@ class SEKALLM:
         else:
             P_pos = {L: P_pos_stack[0].T.contiguous() for L in sel_layers}
 
-        # ---------- load negative projector (optional) ----------
         if neg_pt:
             f_layers, P_neg_stack = _load_proj(neg_pt, dev)
             if f_layers is not None:
@@ -134,10 +152,14 @@ class SEKALLM:
         else:
             P_neg = None
 
-        m_dev = steer_mask_tensor.to(dev) if steer_mask_tensor is not None else None
+        if steer_mask_tensor is not None:
+            steer_mask_tensor = steer_mask_tensor.unsqueeze(0) if steer_mask_tensor.dim() == 1 else steer_mask_tensor
+            m_dev = steer_mask_tensor.to(dev)
+        else:
+            m_dev = None
 
-        # ---------- kernel helpers ----------
-        def phi(x: torch.Tensor) -> torch.Tensor:
+        # ----- kernel helpers ------------------------------------------
+        def phi(x):
             if feature_function is None:
                 return x
             if feature_function == "squared-exponential":
@@ -146,12 +168,9 @@ class SEKALLM:
                 return torch.tanh(x)
             if feature_function == "elu":
                 return torch.where(x >= 0, x, torch.exp(x) - 1)
-
             raise ValueError(f"unknown feature_function {feature_function}")
 
-
-
-        def phi_inv(x: torch.Tensor) -> torch.Tensor:
+        def phi_inv(x):
             if feature_function is None:
                 return x
             eps = torch.full_like(x, 1e-4)
@@ -161,56 +180,73 @@ class SEKALLM:
                 x = torch.clamp(x, -1 + eps, 1 - eps)
                 return torch.atanh(x)
             if feature_function == "elu":
-                pos, neg = x.clamp(min=0), x.clamp(max=0)
-            return pos + torch.log(neg + 1)
+                pos = torch.clamp(x, min=0)
+                neg = torch.clamp(x, max=0)
+                return pos + torch.log(neg + 1)
+            return x
 
-        # ---------- register hooks ----------
+        # ----- register per‑layer hooks --------------------------------
         for L in sel_layers:
             Pp = P_pos[L].to(dtype)
             Pn = P_neg[L].to(dtype) if P_neg else None
-            k_lin = self.model.model.layers[L].self_attn.k_proj
 
-            def _hook(_, __, k_out,
+            attn_layer = self.model.model.layers[L].self_attn
+            hook_module = attn_layer.k_norm if hasattr(attn_layer, "k_norm") else attn_layer.k_proj
+
+            def _hook(_, __, k_in,
                       m=m_dev, P_pos=Pp, P_neg=Pn,
-                      γp=amplify_pos, γn=amplify_neg):
-                # no mask → whole sequence treated as positive only
-                k_feat = phi(k_out.float())  # φ(k)
+                      g_pos=amplify_pos, g_neg=amplify_neg):
 
-                if m is None:  # un‑masked
-                    # k_mod = k_feat + γp * (k_feat @ P_pos)
-                    k_mod = k_feat @ P_pos
-                    return phi_inv(k_mod).to(k_out.dtype)
+                # ---------- unify shape ---------------------------------
+                four_d = (k_in.dim() == 4)  # (B,T,H,D)
+                if four_d:
+                    B, T, H, D = k_in.shape
+                    k_flat = k_in.reshape(B, T, H * D)  # → (B,T,d_kv)
+                else:
+                    B, T, _ = k_in.shape
+                    k_flat = k_in  # already flat
 
-                if k_out.shape[1] != m.numel():
-                    return k_out
+                # ---------- kernel map ---------------------------------
+                k_feat = phi(k_flat.float())  # φ(k)
 
-                sel = m.nonzero(as_tuple=False).squeeze(-1)          # positive
-                non_sel = (~m).nonzero(as_tuple=False).squeeze(-1)   # negative
+                # ---------- no mask: steer whole sequence --------------
+                if m is None:
+                    k_new = phi_inv(k_feat).to(k_in.dtype)
+                    return (k_new.reshape(B, T, H, D) if four_d else k_new)
 
-                if sel.numel():  # positive tokens
-                    k_sel = k_feat[:, sel, :]
-                    k_sel = k_sel + γp * (k_sel @ P_pos)
-                    # k_sel = k_sel @ P_pos
-                    k_out[:, sel, :] = phi_inv(k_sel).to(k_out.dtype)
-                    # k_out[:, sel, :] = (k_sel @ (γp * P_pos))
+                # ---------- shape check --------------------------------
+                if m.shape != (B, T):
+                    return k_in
 
-                if P_neg is not None and non_sel.numel():
-                    k_ns = k_feat[:, non_sel, :]
-                    k_ns = k_ns + γn * (k_ns @ P_neg)
-                    # k_ns = k_ns @ P_neg
-                    k_out[:, non_sel, :] = phi_inv(k_ns).to(k_out.dtype)
-                    # k_out[:, non_sel, :] = (k_ns @ (γn * P_neg))
+                # ---------- per‑batch edit -----------------------------
+                for b in range(B):
+                    mb = m[b]
+                    pos_idx = mb.nonzero().squeeze(-1)
+                    neg_idx = (~mb).nonzero().squeeze(-1)
 
+                    if pos_idx.numel():
+                        kb = k_feat[b, pos_idx, :]
+                        kb = kb + g_pos * (kb @ P_pos)
+                        k_flat[b, pos_idx, :] = phi_inv(kb).to(k_in.dtype)
+
+                    if P_neg is not None and neg_idx.numel():
+                        kb = k_feat[b, neg_idx, :]
+                        kb = kb + g_neg * (kb @ P_neg)
+                        k_flat[b, neg_idx, :] = phi_inv(kb).to(k_in.dtype)
+
+                # ---------- restore original rank ----------------------
+                k_out = k_flat.reshape(B, T, H, D) if four_d else k_flat
                 return k_out
 
-            self._hooks.append(k_lin.register_forward_hook(_hook, prepend=True))
-
-        tag = ("pos+neg" if P_neg is not None else "pos‑only")
+            self._hooks.append(hook_module.register_forward_hook(_hook, prepend=True))
 
         if not silence:
-            print(f"[Key‑Steering] {tag}, layers {sel_layers}, "
-                  f"γ+={amplify_pos}, γ‑={amplify_neg if P_neg else 'n/a'}, "
-                  f"kernel={feature_function or 'linear'}")
+            tag = "pos+neg" if P_neg else "pos‑only"
+            print(
+                f"[Key‑Steering] {tag}, layers {sel_layers}, "
+                f"g+={amplify_pos}, g-={amplify_neg if P_neg else 'n/a'}, "
+                f"kernel={feature_function or 'linear'}"
+            )
 
     def remove_projection(self):
         for h in self._hooks:

@@ -88,13 +88,26 @@ class ProjectionBuilderBase(abc.ABC):
         hidd = self.model(**ids,
                           use_cache=False,
                           output_hidden_states=True).hidden_states
+
         out = []
         for L in self.layers:
-            h = hidd[L][0]                                    # (seq,d_model)
-            k = self.model.model.layers[L].self_attn.k_proj(h)  # (seq,d_kv)
-            k = self._feature_func(k.float()).to(torch.float16)  # ➍ apply kernel
+            h_in = hidd[L][0]  # (seq,d_model)
+
+            attn = self.model.model.layers[L].self_attn
+            if hasattr(attn, 'k_norm'):  # Qwen‑3, Llama‑3
+                n_kv = self.model.config.num_key_value_heads
+                headdim = self.model.config.hidden_size // self.model.config.num_attention_heads
+                k = attn.k_proj(h_in)  # (seq, n_kv·d_h)
+                k = k.view(-1, n_kv, headdim)
+                k = attn.k_norm(k)
+                k = k.view(-1, n_kv * headdim)
+            else:  # vanilla GPT‑style
+                k = attn.k_proj(h_in)
+
+            k = self._feature_func(k.float()).to(torch.float16)
             out.append(k[idx])
-        return out                                            # list(len_layers)
+
+        return out                                        # list(len_layers)
 
     @staticmethod
     def _build_proj(mat: torch.Tensor, pct: float):

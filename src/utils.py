@@ -1,46 +1,75 @@
 # utils.py  ────────────────────────────────────────────────────────────
 import re, torch
-from types import SimpleNamespace
+from typing import List, Tuple, Union
 from transformers import AutoTokenizer, AutoModel
 
 # ╭──────────────────────── 1. encode_with_marker ───────────────────────╮
-def encode_with_markers(text: str,
+def encode_with_markers(text: Union[str, List[str]],
                         tokenizer: AutoTokenizer,
                         m_start: str = '*',
                         m_end: str = '*') -> tuple[torch.Tensor, torch.Tensor]:
-    # TODO 弄成batch的形式，加快benchmark速度，SEKALLM里的generate也需要修改
     """
-    Return (input_ids[1,seq], mask[seq]) where mask marks tokens that were
-    inside <m_start> ... <m_end> spans.  Markers themselves are stripped.
-    Works even when start==end (e.g. '*').
+    Accept either a single string or a list of strings and return
+    `(ids[B, S], steer_mask[B, S], attention_mask[B, S])`
+    padded to the longest sequence in the batch.
     """
-    # 1) locate marker spans & build plain text
+    if isinstance(text, str):
+            text = [text]  # unify to a batch
+
+    ids_lst, steer_lst, attn_lst = [], [], []
     pattern = re.escape(m_start) + r'(.*?)' + re.escape(m_end)
-    pieces, spans, last = [], [], 0
-    for m in re.finditer(pattern, text, flags=re.DOTALL):
-        pieces.append(text[last:m.start()])          # plain before span
-        start_plain = sum(len(p) for p in pieces)
-        span_content = m.group(1)
-        pieces.append(span_content)
-        spans.append((start_plain, start_plain + len(span_content)))
-        last = m.end()
-    pieces.append(text[last:])
-    plain_txt = ''.join(pieces)
 
-    # 2) tokenise plain text and build mask
-    enc = tokenizer(plain_txt,
-                    return_offsets_mapping=True,
-                    add_special_tokens=False)
-    ids  = torch.tensor([enc['input_ids']])
-    steering_mask = torch.zeros(len(enc['input_ids']), dtype=torch.bool)
-    attention_mask = torch.tensor(enc['attention_mask'])
 
-    for s_char, e_char in spans:
-        for tid, (cs, ce) in enumerate(enc['offset_mapping']):
-            if cs >= s_char and ce <= e_char:
-                steering_mask[tid] = True
+    for sample in text:
+        pieces, spans, last = [], [], 0
+        for m in re.finditer(pattern, sample, flags=re.DOTALL):
+            pieces.append(sample[last:m.start()])
+            start_plain = sum(len(p) for p in pieces)
+            span_content = m.group(1)
+            pieces.append(span_content)
+            spans.append((start_plain, start_plain + len(span_content)))
+            last = m.end()
 
-    return ids, steering_mask, attention_mask
+        pieces.append(sample[last:])
+        plain_txt = ''.join(pieces)
+
+        enc = tokenizer(
+            plain_txt,
+            return_offsets_mapping = True,
+            add_special_tokens = False,
+            padding = False,
+        )
+
+        ids_lst.append(enc['input_ids'])
+        attn_lst.append(enc['attention_mask'])
+
+        m = torch.zeros(len(enc['input_ids']), dtype=torch.bool)
+
+        for s_char, e_char in spans:
+            for tid, (cs, ce) in enumerate(enc['offset_mapping']):
+                if cs >= s_char-1 and ce <= e_char:
+                                    m[tid] = True
+
+        steer_lst.append(m)
+
+    # ---------- pad ----------
+    tokenizer.padding_side = "left"
+    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
+
+    max_len = max(len(x) for x in ids_lst)
+
+    def _left_pad(seq, pad_val):
+        return [pad_val] * (max_len - len(seq)) + seq
+
+    ids = torch.tensor([_left_pad(s, pad_id) for s in ids_lst])
+    attn = torch.tensor([_left_pad(s, 0) for s in attn_lst])
+    mask = torch.stack([
+        torch.nn.functional.pad(m, (max_len - len(m), 0))  # left‑pad Boolean
+        for m in steer_lst
+    ])
+
+    # import pdb; pdb.set_trace()
+    return ids, mask, attn
 
 
 

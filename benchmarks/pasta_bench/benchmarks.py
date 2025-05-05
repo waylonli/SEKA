@@ -211,9 +211,7 @@ def counterfact_evaluate(
             elif hasattr(mt.model, "attach_projection"):
                 # print(f"Applying SEKA steering")
                 assert add_marker is not None, "SEKA steering requires markers."
-                ids, steering_mask, attention_mask = encode_with_markers(prompt, tokenizer=mt.model.tok, m_start=add_marker, m_end=add_marker)
-                mt.model.attach_projection(steer_mask_tensor=steering_mask, silence=True)
-                outputs = mt.model.generate(ids=ids, attention_mask=attention_mask, return_raw=True, **generate_kwargs)
+                outputs = mt.model.generate(ids=prompts, steer=True, return_raw=True, **generate_kwargs)
             else:
                 outputs = mt.model.generate(**inputs, **generate_kwargs)
             

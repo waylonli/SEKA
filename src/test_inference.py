@@ -58,7 +58,16 @@ else:
 
 
 # ────────────────── model wrapper ─────────────────────────────────────
-ks = SEKALLM(args.model, device=args.device)
+ks = SEKALLM(
+    args.model,
+    pos_pt=args.pos,
+    neg_pt=args.neg,
+    layers=args.layers,
+    amplify_pos=args.amplify_pos,
+    amplify_neg=args.amplify_neg,
+    feature_function=feature_fn,
+    device=args.device
+)
 
 # print("\n=== PROMPT ===")
 # print(textwrap.fill(args.prompt, 100))
@@ -75,25 +84,9 @@ print(baseline)
 
 # ── steering ──────────────────────────────────────────────────────────
 print("\n--- steered ---")
-if args.neg:
-    ks.attach_projection(pos_pt=args.pos,
-                         neg_pt=args.neg,
-                         layers=args.layers,
-                         steer_mask_tensor=steering_mask,
-                         amplify_pos=args.amplify_pos,
-                         amplify_neg=args.amplify_neg,
-                         feature_function=feature_fn
-                         )
-else:
-    ks.attach_projection(pos_pt=args.pos,
-                         layers=args.layers,
-                         steer_mask_tensor=steering_mask,
-                         amplify_pos=args.amplify_pos,
-                         feature_function=feature_fn)
-
-print("\n")
 steered = ks.generate(
     ids,
+    steer=True,
     max_new_tokens=args.max_new,
     attention_mask=attention_mask,
     pad_token_id=tokenizer.eos_token_id,

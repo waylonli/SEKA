@@ -32,12 +32,12 @@ class SynthQABuilder(ProjectionBuilderBase):
             rel_ctx   = ex["relevant_context"]
             rel_tok   = ex["answer"]
             irrel_ctx = ex["irrelevant_context"]
-            q         = ex["question"]
+            q         = ex["question"] if self.chat else ex["base_postfix"]
 
             if not self.chat:
-                ctx = (f"{rel_ctx}\n{irrel_ctx}\nQuestion: {q}\nAnswer: {rel_tok}"
+                ctx = (f"{rel_ctx}\n{irrel_ctx}\n{q + rel_tok}"
                        if random.random() < .5
-                       else f"{irrel_ctx}\n{rel_ctx}\nQuestion: {q}\nAnswer: {rel_tok}")
+                       else f"{irrel_ctx}\n{rel_ctx}\n{q + rel_tok}")
             else:
                 tokens = self.tok.apply_chat_template(
                     [{
