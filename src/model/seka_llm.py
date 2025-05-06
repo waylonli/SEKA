@@ -206,7 +206,6 @@ class SEKALLM:
                     B, T, _ = k_in.shape
                     k_flat = k_in  # already flat
 
-                import pdb; pdb.set_trace()
                 # ---------- kernel map ---------------------------------
                 k_feat = phi(k_flat.float(), feature_function)  # φ(k)
 
