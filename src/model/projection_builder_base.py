@@ -54,7 +54,7 @@ class ProjectionBuilderBase(abc.ABC):
         buf_Hn = [[] for _ in self.layers]
 
         total = self.max_samples
-        pbar = tqdm(total=total, desc='Processing')
+        pbar = tqdm(total=total, desc='Extracting Keys...', unit='example')
         count = 0
         for ex in self.iter_examples():
             if count >= self.max_samples:
@@ -96,7 +96,7 @@ class ProjectionBuilderBase(abc.ABC):
         pbar.close()
 
         pos_proj, neg_proj = [], []
-        for i in range(len(self.layers)):
+        for i in tqdm(range(len(self.layers)), desc="Computing Projectors...", unit='layer'):
             H_mat = torch.cat(buf_H[i], 0).double().cpu()
             Hp_mat = torch.cat(buf_Hp[i], 0).double().cpu()
             Hn_mat = torch.cat(buf_Hn[i], 0).double().cpu()
