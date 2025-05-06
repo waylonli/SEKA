@@ -43,7 +43,8 @@ if args.chat:
         [{
             "role": "user",
             "content": args.prompt
-        }]
+        }],
+        enable_thinking=True
     )
 
 if "_tanh" in args.pos:
