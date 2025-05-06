@@ -44,7 +44,7 @@ if args.chat:
             "role": "user",
             "content": args.prompt
         }],
-        enable_thinking=True
+        # enable_thinking=True
     )
 
 if "_tanh" in args.pos:
@@ -79,7 +79,7 @@ ids, steering_mask, attention_mask = encode_with_markers(args.prompt, ks.tok,
 ids = ids.to(ks.device)
 
 # ── baseline ──────────────────────────────────────────────────────────
-baseline = ks.generate(ids, max_new_tokens=args.max_new, attention_mask=attention_mask)
+baseline = ks.generate(ids, steer=False, max_new_tokens=args.max_new, attention_mask=attention_mask, do_sample=False, temperature=0.0)
 print("\n--- baseline ---")
 print(baseline)
 
@@ -88,6 +88,7 @@ print("\n--- steered ---")
 steered = ks.generate(
     ids,
     steer=True,
+    steer_mask=steering_mask,
     max_new_tokens=args.max_new,
     attention_mask=attention_mask,
     pad_token_id=tokenizer.eos_token_id,

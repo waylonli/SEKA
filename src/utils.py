@@ -101,3 +101,15 @@ def _load_proj(path: str, device):
     if obj.ndim == 3:
         return list(range(obj.size(0))), obj.to(device)
     raise ValueError("Unsupported projection format")
+
+
+def phi(x: torch.Tensor, name: str | None) -> torch.Tensor:
+    if name is None:
+        return x
+    if name == 'squared-exponential':
+        return torch.exp(-x.pow(2) / 2)
+    if name == 'tanh':
+        return torch.tanh(x)
+    if name == 'elu':
+        return torch.where(x >= 0, x, torch.exp(x) - 1)
+    raise ValueError(f'unknown feature_function {name}')
