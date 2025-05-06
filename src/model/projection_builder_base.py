@@ -130,8 +130,14 @@ class ProjectionBuilderBase(abc.ABC):
         neg_tensor = torch.stack(neg_proj)
 
         os.makedirs(output_dir, exist_ok=True)
-        torch.save({'layers': self.layers, 'proj': pos_tensor.cpu()}, os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
-        torch.save({'layers': self.layers, 'proj': neg_tensor.cpu()}, os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
+        torch.save(
+            {'layers': self.layers, 'proj': pos_tensor.cpu()},
+            os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt")
+        )
+        torch.save(
+            {'layers': self.layers, 'proj': neg_tensor.cpu()},
+            os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt")
+        )
 
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_tensor.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_tensor.shape)}")
