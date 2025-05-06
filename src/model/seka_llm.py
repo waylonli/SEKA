@@ -55,7 +55,18 @@ class SEKALLM:
         self.layers = layers
         self.amplify_pos = amplify_pos
         self.amplify_neg = amplify_neg
-        self.feature_function = feature_function
+
+        if self.feature_function is None:
+            if "_tanh" in pos_pt:
+                feature_function = "tanh"
+            elif "_elu" in pos_pt:
+                feature_function = "elu"
+            elif "_squared" in pos_pt:
+                feature_function = "squared-exponential"
+            else:
+                feature_function = None
+        else:
+            self.feature_function = feature_function
 
         self._hooks: list[torch.utils.hooks.RemovableHandle] = []
         # transparently expose everything from the HF model
@@ -135,7 +146,19 @@ class SEKALLM:
         layers = self.layers if layers is None else layers
         amplify_pos = self.amplify_pos if amplify_pos is None else amplify_pos
         amplify_neg = self.amplify_neg if amplify_neg is None else amplify_neg
-        feature_function = self.feature_function if feature_function is None else feature_function
+        if feature_function is None:
+            if self.feature_function is None:
+                if "_tanh" in pos_pt:
+                    feature_function = "tanh"
+                elif "_elu" in pos_pt:
+                    feature_function = "elu"
+                elif "_squared" in pos_pt:
+                    feature_function = "squared-exponential"
+                else:
+                    feature_function = None
+            else:
+                feature_function = self.feature_function
+
 
         dev, n_layers = self.device, len(self.model.model.layers)
         dtype = torch.float32
