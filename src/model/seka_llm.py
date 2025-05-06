@@ -56,15 +56,15 @@ class SEKALLM:
         self.amplify_pos = amplify_pos
         self.amplify_neg = amplify_neg
 
-        if self.feature_function is None:
+        if feature_function is None:
             if "_tanh" in pos_pt:
-                feature_function = "tanh"
+                self.feature_function = "tanh"
             elif "_elu" in pos_pt:
-                feature_function = "elu"
+                self.feature_function = "elu"
             elif "_squared" in pos_pt:
-                feature_function = "squared-exponential"
+                self.feature_function = "squared-exponential"
             else:
-                feature_function = None
+                self.feature_function = None
         else:
             self.feature_function = feature_function
 
