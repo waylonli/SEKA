@@ -1,8 +1,7 @@
 from __future__ import annotations
 import torch, types
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.utils import encode_with_markers, _parse_layers, _load_proj
-
+from src.utils import encode_with_markers, _parse_layers, _load_proj, phi, phi_inv
 
 class SEKALLM:
     """
@@ -186,33 +185,6 @@ class SEKALLM:
         else:
             m_dev = None
 
-        # ----- kernel helpers ------------------------------------------
-        def phi(x):
-            if feature_function is None:
-                return x
-            if feature_function == "squared-exponential":
-                return torch.exp(-x.pow(2) / 2)
-            if feature_function == "tanh":
-                return torch.tanh(x)
-            if feature_function == "elu":
-                return torch.where(x >= 0, x, torch.exp(x) - 1)
-            raise ValueError(f"unknown feature_function {feature_function}")
-
-        def phi_inv(x):
-            if feature_function is None:
-                return x
-            eps = torch.full_like(x, 1e-4)
-            if feature_function == "squared-exponential":
-                return -torch.log(torch.clamp(x, min=eps)) * 2
-            if feature_function == "tanh":
-                x = torch.clamp(x, -1 + eps, 1 - eps)
-                return torch.atanh(x)
-            if feature_function == "elu":
-                pos = torch.clamp(x, min=0)
-                neg = torch.clamp(x, max=0)
-                return pos + torch.log(neg + 1)
-            return x
-
         # ----- register per‑layer hooks --------------------------------
         for L in sel_layers:
             Pp = P_pos[L].to(dtype)
@@ -234,12 +206,13 @@ class SEKALLM:
                     B, T, _ = k_in.shape
                     k_flat = k_in  # already flat
 
+                import pdb; pdb.set_trace()
                 # ---------- kernel map ---------------------------------
-                k_feat = phi(k_flat.float())  # φ(k)
+                k_feat = phi(k_flat.float(), feature_function)  # φ(k)
 
                 # ---------- no mask: steer whole sequence --------------
                 if m is None:
-                    k_new = phi_inv(k_feat).to(k_in.dtype)
+                    k_new = phi_inv(k_feat, feature_function).to(k_in.dtype)
                     return (k_new.reshape(B, T, H, D) if four_d else k_new)
 
                 # ---------- shape check --------------------------------
@@ -255,12 +228,12 @@ class SEKALLM:
                     if pos_idx.numel():
                         kb = k_feat[b, pos_idx, :]
                         kb = kb + g_pos * (kb @ P_pos)
-                        k_flat[b, pos_idx, :] = phi_inv(kb).to(k_in.dtype)
+                        k_flat[b, pos_idx, :] = phi_inv(kb, feature_function).to(k_in.dtype)
 
                     if P_neg is not None and neg_idx.numel():
                         kb = k_feat[b, neg_idx, :]
                         kb = kb + g_neg * (kb @ P_neg)
-                        k_flat[b, neg_idx, :] = phi_inv(kb).to(k_in.dtype)
+                        k_flat[b, neg_idx, :] = phi_inv(kb, feature_function).to(k_in.dtype)
 
                 # ---------- restore original rank ----------------------
                 k_out = k_flat.reshape(B, T, H, D) if four_d else k_flat

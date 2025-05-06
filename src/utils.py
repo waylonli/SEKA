@@ -113,3 +113,19 @@ def phi(x: torch.Tensor, name: str | None) -> torch.Tensor:
     if name == 'elu':
         return torch.where(x >= 0, x, torch.exp(x) - 1)
     raise ValueError(f'unknown feature_function {name}')
+
+
+def phi_inv(x: torch.Tensor, name: str | None) -> torch.Tensor:
+    if name is None:
+        return x
+    eps = torch.full_like(x, 1e-4)
+    if name == "squared-exponential":
+        return -torch.log(torch.clamp(x, min=eps)) * 2
+    if name == "tanh":
+        x = torch.clamp(x, -1 + eps, 1 - eps)
+        return torch.atanh(x)
+    if name == "elu":
+        pos = torch.clamp(x, min=0)
+        neg = torch.clamp(x, max=0)
+        return pos + torch.log(neg + 1)
+    return x
