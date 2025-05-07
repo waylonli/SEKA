@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--top_pct', type=float, default=0.9)
     parser.add_argument('--feature', type=str, default=None)
     parser.add_argument('--max_samples', type=int, default=1000)
-    parser.add_argument('--min_diff', type=float, default=1e-3)
+    parser.add_argument('--min_diff', type=float, default=2)
     parser.add_argument('--chat', action='store_true')
     parser.add_argument('--output_dir', required=True)
     args = parser.parse_args()

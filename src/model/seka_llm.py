@@ -25,11 +25,11 @@ class SEKALLM:
                  model_or_path: str,
                  *,
                  device: str | None = "auto",
-                 marker_start: str = "*",
+                 marker_start: str = "**",
                  marker_end: str | None = None,
                  pos_pt: str = None,
                  neg_pt: str | None = None,
-                 layers: str = "last4",
+                 layers: str = "last10",
                  amplify_pos: float = 0.8,
                  amplify_neg: float = 0.2,
                  feature_function: str | None = None,
@@ -126,128 +126,99 @@ class SEKALLM:
 
 
 
-    # ───────────── steering control ────────────────────────────────────
-    def attach_projection(self,
-                          steer_mask_tensor=None,
-                          pos_pt=None,
-                          neg_pt=None,
-                          layers=None,
-                          amplify_pos=None,
-                          amplify_neg=None,
-                          feature_function=None,
-                          silence=False):
+    def attach_projection(
+        self,
+        steer_mask_tensor=None,
+        pos_pt=None,
+        neg_pt=None,
+        layers=None,
+        amplify_pos=None,
+        amplify_neg=None,
+        feature_function=None,
+        silence=False
+    ):
+        self.remove_projection()
 
-        self.remove_projection()  # clear old hooks
-
-        # ----- defaults -------------------------------------------------
-        pos_pt = self.pos_pt if pos_pt is None else pos_pt
-        neg_pt = self.neg_pt if neg_pt is None else neg_pt
-        layers = self.layers if layers is None else layers
-        amplify_pos = self.amplify_pos if amplify_pos is None else amplify_pos
-        amplify_neg = self.amplify_neg if amplify_neg is None else amplify_neg
-        if feature_function is None:
-            if self.feature_function is None:
-                if "_tanh" in pos_pt:
-                    feature_function = "tanh"
-                elif "_elu" in pos_pt:
-                    feature_function = "elu"
-                elif "_squared" in pos_pt:
-                    feature_function = "squared-exponential"
-                else:
-                    feature_function = None
-            else:
-                feature_function = self.feature_function
-
+        # defaults
+        pos_pt = self.pos_pt     if pos_pt     is None else pos_pt
+        neg_pt = self.neg_pt     if neg_pt     is None else neg_pt
+        layers = self.layers     if layers     is None else layers
+        amplify_pos    = self.amplify_pos    if amplify_pos    is None else amplify_pos
+        amplify_neg    = self.amplify_neg    if amplify_neg    is None else amplify_neg
+        feature_function = (
+            self.feature_function if feature_function is None else feature_function
+        )
 
         dev, n_layers = self.device, len(self.model.model.layers)
         dtype = torch.float32
 
-        # ----- load projectors -----------------------------------------
-        file_layers, P_pos_stack = _load_proj(pos_pt, dev)
+        # load 4-D stacks
+        file_layers, P_pos_stack = _load_proj(pos_pt, dev)  # → (L_sel,H,d,d)
         sel_layers = _parse_layers(layers, n_layers)
-        if file_layers is not None:
-            P_pos = {L: P_pos_stack[i].T.contiguous() for i, L in enumerate(file_layers)}
-        else:
-            P_pos = {L: P_pos_stack[0].T.contiguous() for L in sel_layers}
+        if P_pos_stack.ndim != 4:
+            raise ValueError("Expected 4‑D pos_proj")
+        # map layer→(H,d,d)
+        P_pos = {layer: P_pos_stack[i].to(dtype) for i, layer in enumerate(sel_layers)}
 
         if neg_pt:
-            f_layers, P_neg_stack = _load_proj(neg_pt, dev)
-            if f_layers is not None:
-                P_neg = {L: P_neg_stack[i].T.contiguous() for i, L in enumerate(f_layers)}
-            else:
-                P_neg = {L: P_neg_stack[0].T.contiguous() for L in sel_layers}
+            _, P_neg_stack = _load_proj(neg_pt, dev)
+            if P_neg_stack.ndim != 4:
+                raise ValueError("Expected 4‑D neg_proj")
+            P_neg = {layer: P_neg_stack[i].to(dtype) for i, layer in enumerate(sel_layers)}
         else:
             P_neg = None
 
+        # steering mask
         if steer_mask_tensor is not None:
-            steer_mask_tensor = steer_mask_tensor.unsqueeze(0) if steer_mask_tensor.dim() == 1 else steer_mask_tensor
+            steer_mask_tensor = (
+                steer_mask_tensor.unsqueeze(0)
+                if steer_mask_tensor.dim() == 1
+                else steer_mask_tensor
+            )
             m_dev = steer_mask_tensor.to(dev)
         else:
             m_dev = None
 
-        # ----- register per‑layer hooks --------------------------------
+        # register hooks
         for L in sel_layers:
-            Pp = P_pos[L].to(dtype)
-            Pn = P_neg[L].to(dtype) if P_neg else None
+            Pp_layer = P_pos[L]       # (H,d,d)
+            Pn_layer = P_neg[L] if P_neg else None
 
-            attn_layer = self.model.model.layers[L].self_attn
-            hook_module = attn_layer.k_norm if hasattr(attn_layer, "k_norm") else attn_layer.k_proj
+            attn = self.model.model.layers[L].self_attn
+            mod  = attn.k_norm if hasattr(attn, "k_norm") else attn.k_proj
 
             def _hook(_, __, k_in,
-                      m=m_dev, P_pos=Pp, P_neg=Pn,
-                      g_pos=amplify_pos, g_neg=amplify_neg):
-
-                # ---------- unify shape ---------------------------------
-                four_d = (k_in.dim() == 4)  # (B,T,H,D)
-                if four_d:
-                    B, T, H, D = k_in.shape
-                    k_flat = k_in.reshape(B, T, H * D)  # → (B,T,d_kv)
-                else:
-                    B, T, _ = k_in.shape
-                    k_flat = k_in  # already flat
-
-                # ---------- kernel map ---------------------------------
-                k_feat = phi(k_flat.float(), feature_function)  # φ(k)
-
-                # ---------- no mask: steer whole sequence --------------
+                      m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
+                      gp=amplify_pos, gn=amplify_neg):
+                B, T, H, D = k_in.shape
+                k_feat = phi(k_in.float(), feature_function)
                 if m is None:
-                    k_new = phi_inv(k_feat, feature_function).to(k_in.dtype)
-                    return (k_new.reshape(B, T, H, D) if four_d else k_new)
-
-                # ---------- shape check --------------------------------
+                    return phi_inv(k_feat, feature_function).to(k_in.dtype)
                 if m.shape != (B, T):
                     return k_in
 
-                # ---------- per‑batch edit -----------------------------
+                k_out = k_feat.clone()
                 for b in range(B):
-                    mb = m[b]
-                    pos_idx = mb.nonzero().squeeze(-1)
-                    neg_idx = (~mb).nonzero().squeeze(-1)
+                    pos_idx = m[b].nonzero(as_tuple=True)[0]
+                    neg_idx = (~m[b]).nonzero(as_tuple=True)[0]
 
-                    if pos_idx.numel():
-                        kb = k_feat[b, pos_idx, :]
-                        kb = kb + g_pos * (kb @ P_pos)
-                        k_flat[b, pos_idx, :] = phi_inv(kb, feature_function).to(k_in.dtype)
+                    for h in range(H):
+                        if pos_idx.numel():
+                            kb = k_feat[b, pos_idx, h]
+                            kb = kb + gp * (kb @ Pp[h])
+                            # kb = kb @ Pp[h]
+                            k_out[b, pos_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
+                        if Pn is not None and neg_idx.numel():
+                            kb = k_feat[b, neg_idx, h]
+                            kb = kb + gn * (kb @ Pn[h])
+                            # kb = kb @ Pn[h]
+                            k_out[b, neg_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
+                return k_out.to(k_in.dtype)
 
-                    if P_neg is not None and neg_idx.numel():
-                        kb = k_feat[b, neg_idx, :]
-                        kb = kb + g_neg * (kb @ P_neg)
-                        k_flat[b, neg_idx, :] = phi_inv(kb, feature_function).to(k_in.dtype)
-
-                # ---------- restore original rank ----------------------
-                k_out = k_flat.reshape(B, T, H, D) if four_d else k_flat
-
-                return k_out
-
-            self._hooks.append(hook_module.register_forward_hook(_hook, prepend=True))
+            self._hooks.append(mod.register_forward_hook(_hook))
 
         if not silence:
-            tag = "pos+neg" if P_neg else "pos‑only"
-            print(
-                f"[Key‑Steering] {tag}, layers {sel_layers}, "
-                f"g+={amplify_pos}, g-={amplify_neg if P_neg else 'n/a'}, "
-                f"kernel={feature_function or 'linear'}"
-            )
+            print(f"✅ Steering hooks attached on layers {sel_layers}")
 
     def remove_projection(self):
         for h in self._hooks:

@@ -86,21 +86,31 @@ def _parse_layers(spec: str, total: int):
 
 
 def _load_proj(path: str, device):
-    """
-    允许两种格式：
-      • torch tensor  :  shape (d,d)  或  (L_sel,d,d)
-      • dict{layers,proj}
-          layers : List[int] 与 proj 首维对应
-          proj   : Tensor (L_sel,d,d)
-    """
-    obj = torch.load(path, map_location='cpu')
+    obj = torch.load(path, map_location=device)
+
+    # Unpack dict format
     if isinstance(obj, dict):
-        return obj['layers'], obj['proj'].to(device)
-    if obj.ndim == 2:          # 通用到所有层
-        return None, obj[None].to(device)         # (1,d,d)
-    if obj.ndim == 3:
-        return list(range(obj.size(0))), obj.to(device)
-    raise ValueError("Unsupported projection format")
+        layers = obj.get('layers', None)
+        proj   = obj['proj'].to(device)
+    else:
+        layers = None
+        proj   = obj.to(device)
+
+    # Normalize to 4-D
+    if proj.ndim == 2:
+        # (d, d) → (1, 1, d, d)
+        d = proj.size(0)
+        proj = proj.unsqueeze(0).unsqueeze(0)
+    elif proj.ndim == 3:
+        # (L_sel, d, d) → (L_sel, 1, d, d)
+        proj = proj.unsqueeze(1)
+    elif proj.ndim == 4:
+        # already (L_sel, H, d, d)
+        pass
+    else:
+        raise ValueError(f"Unsupported proj dimension: {proj.ndim}")
+
+    return layers, proj
 
 
 def phi(x: torch.Tensor, name: str | None) -> torch.Tensor:

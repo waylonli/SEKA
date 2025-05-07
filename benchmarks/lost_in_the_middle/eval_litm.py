@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from src.model import SEKALLM
 import torch, string, regex
 from typing import List
 
@@ -43,12 +44,23 @@ def base_prompt(ex, prefix):
 
 # ────────── main ─────────────────────────────────────────────────────
 @torch.inference_mode()
-def run(model_id, device, data_dir, chat,
+def run(model_id, apply_seka, seka_pos, seka_neg, seka_amplify_pos, seka_amplify_neg, seka_layers, device, data_dir, chat,
         max_new_tokens, max_samples, batch_size, exp_name, prefix):
     tok = AutoTokenizer.from_pretrained(model_id)
-    mod = AutoModelForCausalLM.from_pretrained(model_id,
-                                               torch_dtype=torch.bfloat16
-                                              ).to(device).eval()
+
+    if not apply_seka:
+        mod = AutoModelForCausalLM.from_pretrained(model_id,
+                                                   torch_dtype=torch.bfloat16
+                                                  ).to(device).eval()
+    else:
+        mod = SEKALLM(
+            model_id,
+            pos_pt=seka_pos,
+            neg_pt=seka_neg,
+            layers=seka_layers,
+            amplify_pos=seka_amplify_pos,
+            amplify_neg=seka_amplify_neg,
+        )
 
     base_dir   = Path("benchmarks/lost_in_the_middle")
     res_dir    = base_dir / "results" / exp_name
@@ -79,28 +91,45 @@ def run(model_id, device, data_dir, chat,
                                   desc=f"gold@{gold_pos}"):
                     chunk = examples[start:start + batch_size]
 
-                    prompts = ([tok.apply_chat_template(chat_prompt(e, prefix), tokenize=False)
+                    prompts = ([tok.apply_chat_template(chat_prompt(e, prefix), tokenize=False, enable_thinking=False)
                                 for e in chunk] if chat
                                else [base_prompt(e, prefix) for e in chunk])
 
                     enc = tok(prompts, return_tensors="pt",
                               padding=True, truncation=True).to(device)
 
-                    out = mod.generate(**enc,
-                                       max_new_tokens=max_new_tokens,
-                                       do_sample=False,
-                                       pad_token_id=tok.eos_token_id)
+                    if not apply_seka:
+                        out = mod.generate(**enc,
+                                           max_new_tokens=max_new_tokens,
+                                           do_sample=False,
+                                           pad_token_id=tok.eos_token_id)
+                        prompt_lens = enc["attention_mask"].sum(1)
 
-                    prompt_lens = enc["attention_mask"].sum(1)
-
-                    for j, ex in enumerate(chunk):
-                        gen_ids = out[j, prompt_lens[j]:]
-                        ans     = tok.decode(gen_ids,
+                        for j, ex in enumerate(chunk):
+                            gen_ids = out[j, prompt_lens[j]:]
+                            ans = tok.decode(gen_ids,
                                              skip_special_tokens=True).strip()
-                        ems.append(best_subspan_em(ans, ex["answers"]))
-                        pf.write(json.dumps({"id": start + j,
-                                             "answer": ans},
-                                            ensure_ascii=False) + "\n")
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
+                    else:
+                        out = mod.generate(
+                            prompts,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            temperature=0.0,
+                            pad_token_id=tok.eos_token_id
+                        )
+
+                        for j, ex in enumerate(chunk):
+                            ans = out[j]
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
 
             score = statistics.mean(ems)
             csv_writer.writerow([gold_pos, f"{score:.4f}"])
@@ -116,6 +145,12 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--data-dir", required=True)
     p.add_argument("--model", dest="model_id", required=True)
+    p.add_argument("--apply-seka", action="store_true")
+    p.add_argument("--seka-pos", required=False)
+    p.add_argument("--seka-neg", required=False)
+    p.add_argument("--seka-layers", required=False, default="last10")
+    p.add_argument("--seka-amplify-pos", required=False, type=float)
+    p.add_argument("--seka-amplify-neg", required=False, type=float)
     p.add_argument("--chat", action="store_true")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--max-new-tokens", type=int, default=60)

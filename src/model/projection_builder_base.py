@@ -49,44 +49,47 @@ class ProjectionBuilderBase(abc.ABC):
         ...
 
     def run(self, output_dir):
-        buf_H = [[] for _ in self.layers]
-        buf_Hp = [[] for _ in self.layers]
-        buf_Hn = [[] for _ in self.layers]
+        # 1) buffers per layer, per head
+        num_layers = len(self.layers)
+        n_kv       = self.model.config.num_key_value_heads
+        buf_H   = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
+        buf_Hp  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
+        buf_Hn  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
 
-        total = self.max_samples
-        pbar = tqdm(total=total, desc='Extracting Keys...', unit='example')
+        pbar = tqdm(total=self.max_samples, desc="Extracting Keys", unit="ex")
         count = 0
         for ex in self.iter_examples():
             if count >= self.max_samples:
                 break
             for ctx, rel_q, ans, irr_q in self.get_triplets(ex):
+                # assemble texts
                 if self.chat:
-                    text_H = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": ctx}], tokenize=False
-                    )
-                    text_Hp = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": f"{ctx} {rel_q}"}], tokenize=False
-                    )
-                    text_Hn = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": f"{ctx} {irr_q}"}], tokenize=False
-                    )
+                    text_H = self.tokenizer.apply_chat_template([{"role":"user","content":ctx}], tokenize=False)
+                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"{ctx} {rel_q}"}], tokenize=False)
+                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"{ctx} {irr_q}"}], tokenize=False)
                 else:
                     text_H, text_Hp, text_Hn = ctx, f"{ctx} {rel_q}", f"{ctx} {irr_q}"
 
-                idx_H = self.span_token_indices(self.tokenizer, text_H, ans)
+                # find answer token indices
+                idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
                 idx_Hp = self.span_token_indices(self.tokenizer, text_Hp, ans)
                 idx_Hn = self.span_token_indices(self.tokenizer, text_Hn, ans)
                 if not (idx_H and idx_Hp and idx_Hn):
                     continue
 
-                keys_H = self.extract_keys(self.model, self.tokenizer, text_H, idx_H, self.layers, self.feature)
+                # extract keys: flat list of length num_layers*n_kv
+                keys_H  = self.extract_keys(self.model, self.tokenizer, text_H,  idx_H,  self.layers, self.feature)
                 keys_Hp = self.extract_keys(self.model, self.tokenizer, text_Hp, idx_Hp, self.layers, self.feature)
                 keys_Hn = self.extract_keys(self.model, self.tokenizer, text_Hn, idx_Hn, self.layers, self.feature)
 
-                for i in range(len(self.layers)):
-                    buf_H[i].append(keys_H[i])
-                    buf_Hp[i].append(keys_Hp[i])
-                    buf_Hn[i].append(keys_Hn[i])
+                # distribute into buffers
+                for idx_flat, (k_H, k_Hp, k_Hn) in enumerate(zip(keys_H, keys_Hp, keys_Hn)):
+                    L = idx_flat // n_kv
+                    h = idx_flat %  n_kv
+                    buf_H[L][h].append(k_H)
+                    buf_Hp[L][h].append(k_Hp)
+                    buf_Hn[L][h].append(k_Hn)
+
                 count += 1
                 pbar.update(1)
                 if count >= self.max_samples:
@@ -95,52 +98,79 @@ class ProjectionBuilderBase(abc.ABC):
                 break
         pbar.close()
 
-        pos_proj, neg_proj = [], []
-        for i in tqdm(range(len(self.layers)), desc="Computing Projectors...", unit='layer'):
-            H_mat = torch.cat(buf_H[i], 0).double().cpu()
-            Hp_mat = torch.cat(buf_Hp[i], 0).double().cpu()
-            Hn_mat = torch.cat(buf_Hn[i], 0).double().cpu()
+        # 2) compute per-layer, per-head projectors
+        pos_list, neg_list = [], []
+        applied, skipped = [], []
 
-            C0 = (H_mat.T @ H_mat) / H_mat.size(0)
-            U0, S0, _ = torch.linalg.svd(C0.float(), full_matrices=False)
-            k0 = (S0.cumsum(0) / S0.sum() < self.top_pct).sum().item() + 1
-            P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float16)
+        for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
+            Pp_heads, Pn_heads = [], []
+            for h in range(n_kv):
+                H_mat  = torch.cat(buf_H[L][h],  0).double().to(self.device)
+                Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
+                Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
 
-            Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
-            Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
+                # neutral PCA → P0
+                C0 = (H_mat.T @ H_mat) / H_mat.size(0)
+                U0, S0, _ = torch.linalg.svd(C0.float(), full_matrices=False)
+                k0 = (S0.cumsum(0)/S0.sum() < self.top_pct).sum().item() + 1
+                P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float)
 
-            Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
-            Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
+                # cross-cov → Pp, Pn
+                Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
+                Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
+                Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
+                Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
+                kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
+                kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
+                Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
+                Pn = (Un[:, -kn:] @ Un[:, -kn:].T).to(torch.float)
 
-            kp = (Sp.cumsum(0) / Sp.sum() < self.top_pct).sum().item() + 1
-            kn = (Sn.cumsum(0) / Sn.sum() < self.top_pct).sum().item() + 1
+                # decide
+                if torch.norm(Pp - Pn) < self.min_diff:
+                    Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
+                    Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
+                    # Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
+                    # Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
+                    skipped.append((self.layers[L], h))
+                else:
+                    applied.append((self.layers[L], h))
 
-            Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float16)
-            Pn = (Un[:, -kn:] @ Un[:, -kn:].T).to(torch.float16)
+                Pp_heads.append(Pp)
+                Pn_heads.append(Pn)
 
-            if torch.norm(Pp - P0) < self.min_diff:
-                Pp = P0
-            if torch.norm(Pn - P0) < self.min_diff:
-                Pn = P0
+            pos_list.append(torch.stack(Pp_heads, dim=0))  # (H,d,d)
+            neg_list.append(torch.stack(Pn_heads, dim=0))
 
-            pos_proj.append(Pp)
-            neg_proj.append(Pn)
+        # stack layers → (num_layers, H, d, d)
+        pos_proj = torch.stack(pos_list, dim=0)
+        neg_proj = torch.stack(neg_list, dim=0)
 
-        pos_tensor = torch.stack(pos_proj)
-        neg_tensor = torch.stack(neg_proj)
-
+        # save
         os.makedirs(output_dir, exist_ok=True)
-        torch.save(
-            {'layers': self.layers, 'proj': pos_tensor.cpu()},
-            os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt")
-        )
-        torch.save(
-            {'layers': self.layers, 'proj': neg_tensor.cpu()},
-            os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt")
-        )
 
-        print(f"Saved positive projectors to {output_dir}, {tuple(pos_tensor.shape)}")
-        print(f"Saved negative projectors to {output_dir}, {tuple(neg_tensor.shape)}")
+
+        torch.save({'layers': self.layers, 'proj': pos_proj.cpu()}, os.path.join(output_dir,
+                         f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
+                output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
+        torch.save({'layers': self.layers, 'proj': neg_proj.cpu()}, os.path.join(output_dir,
+                         f"{self.model_path.split('/')[-1]}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(
+                output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
+
+        # summary
+        print("\nProjection Summary:")
+        if applied:
+            print(" ✔ Applied projection:")
+            for L, h in applied:
+                print(f"    • Layer {L}, Head {h}")
+        if skipped:
+            print(" ✖ Skipped (identity):")
+            for L, h in skipped:
+                print(f"    • Layer {L}, Head {h}")
+
+        print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
+        print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
+
+
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -162,18 +192,26 @@ class ProjectionBuilderBase(abc.ABC):
         for L in layers:
             h_in = hiddens[L][0]
             attn = model.model.layers[L].self_attn
-            if hasattr(attn, 'k_norm'):
-                n_kv = model.config.num_key_value_heads
-                dim_h = model.config.hidden_size // model.config.num_attention_heads
-                k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
-                k = attn.k_norm(k).view(-1, n_kv * dim_h)
+
+            if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+                if hasattr(attn, 'k_norm'):
+                    n_kv = model.config.num_key_value_heads
+                    dim_h = model.config.hidden_size // model.config.num_attention_heads
+                    # reshape into (seq_len, heads, head_dim)
+                    k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
+                    k = attn.k_norm(k).view(-1, n_kv, dim_h)
             else:
-                k = attn.k_proj(h_in)
+                raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}. Currently only Qwen3 models are supported.")
+
             # check if k contains nan
             if torch.isnan(k).any():
                 import pdb; pdb.set_trace()
                 raise ValueError("k contains NaN values")
 
-            k = phi(k.float(), feature).to(torch.float16)
-            result.append(k[indices])
+            k = phi(k.float(), feature).to(torch.float)
+            # select only our tokens, and then return per-head slices
+            k_sel = k[indices]  # (n_tokens, n_kv, dim_h)
+            for h in range(k_sel.size(1)):
+                result.append(k_sel[:, h, :])
+
         return result
