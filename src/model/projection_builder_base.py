@@ -127,13 +127,13 @@ class ProjectionBuilderBase(abc.ABC):
 
                 # decide
                 if torch.norm(Pp - Pn) < self.min_diff:
-                    Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
-                    Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
-                    # Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
-                    # Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
-                    skipped.append((self.layers[L], h))
+                    # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
+                    # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
+                    skipped.append((self.layers[L], h, torch.norm(Pp - Pn)))
+                    Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
+                    Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
                 else:
-                    applied.append((self.layers[L], h))
+                    applied.append((self.layers[L], h, torch.norm(Pp - Pn)))
 
                 Pp_heads.append(Pp)
                 Pn_heads.append(Pn)
@@ -159,13 +159,13 @@ class ProjectionBuilderBase(abc.ABC):
         # summary
         print("\nProjection Summary:")
         if applied:
-            print(" ✔ Applied projection:")
-            for L, h in applied:
-                print(f"    • Layer {L}, Head {h}")
+            print(f" ✔ Applied projection: {len(applied)}")
+            for L, h, diff in applied:
+                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
         if skipped:
-            print(" ✖ Skipped (identity):")
-            for L, h in skipped:
-                print(f"    • Layer {L}, Head {h}")
+            print(f" ✖ Skipped (identity): {len(skipped)}")
+            for L, h, diff in skipped:
+                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
