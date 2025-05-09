@@ -5,6 +5,12 @@ import os
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from src.utils import phi, _parse_layers
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.manifold import TSNE
+import warnings
+warnings.filterwarnings("ignore")
 
 torch.set_grad_enabled(False)
 
@@ -59,16 +65,14 @@ class ProjectionBuilderBase(abc.ABC):
         pbar = tqdm(total=self.max_samples, desc="Extracting Keys", unit="ex")
         count = 0
         for ex in self.iter_examples():
-            if count >= self.max_samples:
-                break
             for ctx, rel_q, ans, irr_q in self.get_triplets(ex):
                 # assemble texts
                 if self.chat:
                     text_H = self.tokenizer.apply_chat_template([{"role":"user","content":ctx}], tokenize=False)
-                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"{ctx} {rel_q}"}], tokenize=False)
-                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"{ctx} {irr_q}"}], tokenize=False)
+                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
                 else:
-                    text_H, text_Hp, text_Hn = ctx, f"{ctx} {rel_q}", f"{ctx} {irr_q}"
+                    text_H, text_Hp, text_Hn = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}", f"Question: {irr_q}\nContext: {ctx}"
 
                 # find answer token indices
                 idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
@@ -90,10 +94,9 @@ class ProjectionBuilderBase(abc.ABC):
                     buf_Hp[L][h].append(k_Hp)
                     buf_Hn[L][h].append(k_Hn)
 
-                count += 1
-                pbar.update(1)
-                if count >= self.max_samples:
-                    break
+            count += 1
+            pbar.update(1)
+
             if count >= self.max_samples:
                 break
         pbar.close()
@@ -101,6 +104,8 @@ class ProjectionBuilderBase(abc.ABC):
         # 2) compute per-layer, per-head projectors
         pos_list, neg_list = [], []
         applied, skipped = [], []
+        all_pos_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
+        all_neg_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
 
         for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
@@ -108,6 +113,10 @@ class ProjectionBuilderBase(abc.ABC):
                 H_mat  = torch.cat(buf_H[L][h],  0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
                 Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
+
+                # Store positive and negative embeddings
+                all_pos_keys[L][h].append(Hp_mat.cpu().detach().numpy())
+                all_neg_keys[L][h].append(Hn_mat.cpu().detach().numpy())
 
                 # neutral PCA → P0
                 C0 = (H_mat.T @ H_mat) / H_mat.size(0)
@@ -126,15 +135,15 @@ class ProjectionBuilderBase(abc.ABC):
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
                 # decide
-                if torch.norm(Pp - Pn) < self.min_diff:
+                if torch.norm(Omega_p - Omega_n) < self.min_diff:
                     # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
                     # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
-                    skipped.append((self.layers[L], h, torch.norm(Pp - Pn)))
+                    skipped.append((self.layers[L], h, torch.norm(Omega_p - Omega_n)))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
                     Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
 
                 else:
-                    applied.append((self.layers[L], h, torch.norm(Pp - Pn)))
+                    applied.append((self.layers[L], h, torch.norm(Omega_p - Omega_n)))
 
                 Pp_heads.append(Pp)
                 Pn_heads.append(Pn)
@@ -170,6 +179,15 @@ class ProjectionBuilderBase(abc.ABC):
 
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
+
+        # Convert to numpy arrays
+        all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
+        all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
+
+        # Visualize using T-SNE
+        self.visualize_tsne_kde(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
 
 
@@ -216,3 +234,52 @@ class ProjectionBuilderBase(abc.ABC):
                 result.append(k_sel[:, h, :])
 
         return result
+
+    def visualize_tsne_kde(self, pos_keys, neg_keys, output_dir):
+        """
+        Visualizes the T-SNE of the positive and negative key embeddings as a KDE plot, separately for each layer and head.
+
+        Args:
+            pos_keys (np.array): The positive key embeddings.
+            neg_keys (np.array): The negative key embeddings.
+            output_dir (str): The directory where to save the plot.
+        """
+        num_layers = len(self.layers)
+        n_kv = self.model.config.num_key_value_heads
+
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Loop over layers
+        for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
+            # Create a subfolder for the layer
+            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]}")
+            os.makedirs(layer_dir, exist_ok=True)
+
+            # Loop over heads within the current layer
+            for h in range(n_kv):
+                # Get the embeddings for the current layer and head
+                pos_embeddings_2d = TSNE(n_components=2, perplexity=30, n_iter=300).fit_transform(pos_keys[L][h])
+                neg_embeddings_2d = TSNE(n_components=2, perplexity=30, n_iter=300).fit_transform(neg_keys[L][h])
+
+                # Create KDE plot
+                plt.figure(figsize=(8, 6))
+
+                # Plot KDE for positive embeddings (blue)
+                sns.kdeplot(x=pos_embeddings_2d[:, 0], y=pos_embeddings_2d[:, 1], cmap='Blues', fill=True, thresh=0,
+                            levels=10, alpha=0.5, label="Positive")
+
+                # Plot KDE for negative embeddings (red)
+                sns.kdeplot(x=neg_embeddings_2d[:, 0], y=neg_embeddings_2d[:, 1], cmap='Reds', fill=True, thresh=0,
+                            levels=10, alpha=0.5, label="Negative")
+
+                # Add labels and title
+                plt.title(f"Layer {self.layers[L]} - Head {h} - T-SNE KDE Plot of Key Embeddings")
+                plt.xlabel("t-SNE component 1")
+                plt.ylabel("t-SNE component 2")
+                plt.legend()
+
+                # Save the plot for this head in the layer folder
+                plt.savefig(os.path.join(layer_dir, f"Head_{h}_tsne_kde_plot.png"))
+                plt.close()
+
