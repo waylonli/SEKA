@@ -88,6 +88,7 @@ class SEKALLM:
         if isinstance(ids, (str, list)):
             ids, steer_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
             ids = ids.to(self.device)
+            # check decoded ids
             steer_mask = steer_mask.to(self.device)
             attention_mask = attention_mask.to(self.device)
         elif isinstance(ids, torch.Tensor):
@@ -104,6 +105,9 @@ class SEKALLM:
             self.attach_projection(steer_mask_tensor=steer_mask, silence=True)
         else:
             self.remove_projection()
+
+        if "attention_mask" not in gen_kw and attention_mask is not None:
+            gen_kw["attention_mask"] = attention_mask
 
         out = self.model.generate(
             ids,
@@ -195,6 +199,9 @@ class SEKALLM:
                 if m is None:
                     return phi_inv(k_feat, feature_function).to(k_in.dtype)
                 if m.shape != (B, T):
+                    return k_in
+                # if m is all False, also return k_in
+                if m.sum() == 0:
                     return k_in
 
                 k_out = k_feat.clone()

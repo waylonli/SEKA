@@ -6,8 +6,8 @@ from transformers import AutoTokenizer, AutoModel
 # ╭──────────────────────── 1. encode_with_marker ───────────────────────╮
 def encode_with_markers(text: Union[str, List[str]],
                         tokenizer: AutoTokenizer,
-                        m_start: str = '*',
-                        m_end: str = '*') -> tuple[torch.Tensor, torch.Tensor]:
+                        m_start: str = '**',
+                        m_end: str = '**') -> tuple[torch.Tensor, torch.Tensor]:
     """
     Accept either a single string or a list of strings and return
     `(ids[B, S], steer_mask[B, S], attention_mask[B, S])`
@@ -117,7 +117,8 @@ def phi(x: torch.Tensor, name: str | None) -> torch.Tensor:
     if name is None:
         return x
     if name == 'squared-exponential':
-        return torch.exp(-x.pow(2) / 2)
+        length_scale = 1
+        return torch.exp(-1 * x ** 2 / (2 * length_scale ** 2))
     if name == 'tanh':
         return torch.tanh(x)
     if name == 'elu':
@@ -130,7 +131,9 @@ def phi_inv(x: torch.Tensor, name: str | None) -> torch.Tensor:
         return x
     eps = torch.full_like(x, 1e-4)
     if name == "squared-exponential":
-        return -torch.log(torch.clamp(x, min=eps)) * 2
+        length_scale = 1
+        eps = torch.ones(x.shape) * 1e-4
+        return -torch.log(torch.max(x, eps)) * 2 * length_scale ** 2
     if name == "tanh":
         x = torch.clamp(x, -1 + eps, 1 - eps)
         return torch.atanh(x)

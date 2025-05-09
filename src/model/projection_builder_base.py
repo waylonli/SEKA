@@ -123,7 +123,7 @@ class ProjectionBuilderBase(abc.ABC):
                 kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
                 kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
-                Pn = (Un[:, -kn:] @ Un[:, -kn:].T).to(torch.float)
+                Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
                 # decide
                 if torch.norm(Pp - Pn) < self.min_diff:
@@ -132,6 +132,7 @@ class ProjectionBuilderBase(abc.ABC):
                     skipped.append((self.layers[L], h, torch.norm(Pp - Pn)))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
                     Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
+
                 else:
                     applied.append((self.layers[L], h, torch.norm(Pp - Pn)))
 

@@ -7,6 +7,9 @@ from src.model import SEKALLM
 import torch, string, regex
 from typing import List
 
+from src.utils import encode_with_markers
+
+
 # ────────── metric ───────────────────────────────────────────────────
 def normalize_answer(s: str) -> str:
     def remove_articles(text):  return regex.sub(r"\b(a|an|the)\b", " ", text)
@@ -26,7 +29,7 @@ def best_subspan_em(prediction: str, ground_truths: List[str]) -> float:
 
 # ────────── prompt builders ──────────────────────────────────────────
 def chat_prompt(ex, prefix):
-    ctx = "\n\n".join(f"[{i}] {c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
+    ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
     prefix_str = "**Pay more attention to the context in the middle.** " if prefix else ""
     user = (
         f"{prefix_str}Directly answer in one short phrase without any other word.\n\n"
@@ -35,11 +38,14 @@ def chat_prompt(ex, prefix):
     return [{"role": "user", "content": user}]
 
 def base_prompt(ex, prefix):
-    ctx = "\n\n".join(f"[{i}] {c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
+    ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
+          "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+          "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
+    # ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
     prefix_str = "**Pay more attention to the context in the middle.** " if prefix else ""
     return (
         f"{prefix_str}Directly answer in one short phrase without any other word.\n\n"
-        f"Question: {ex['question']}\n\nContext:\n{ctx}\n\nAnswer:"
+        f"Context:\n{ctx}\n\nQuestion: {ex['question']}\n\nAnswer:"
     )
 
 # ────────── main ─────────────────────────────────────────────────────
@@ -95,18 +101,20 @@ def run(model_id, apply_seka, seka_pos, seka_neg, seka_amplify_pos, seka_amplify
                                 for e in chunk] if chat
                                else [base_prompt(e, prefix) for e in chunk])
 
-                    enc = tok(prompts, return_tensors="pt",
-                              padding=True, truncation=True).to(device)
+                    # enc = tok(prompts, return_tensors="pt",
+                    #           padding=True, truncation=True).to(device)
+                    ids, steering_mask, attention_mask = encode_with_markers(prompts, tok)
+                    ids, steering_mask, attention_mask = ids.to(device), steering_mask.to(device), attention_mask.to(device)
 
                     if not apply_seka:
-                        out = mod.generate(**enc,
+                        out = mod.generate(ids, attention_mask=attention_mask,
                                            max_new_tokens=max_new_tokens,
+
                                            do_sample=False,
                                            pad_token_id=tok.eos_token_id)
-                        prompt_lens = enc["attention_mask"].sum(1)
 
                         for j, ex in enumerate(chunk):
-                            gen_ids = out[j, prompt_lens[j]:]
+                            gen_ids = out[j, ids.shape[-1]:]
                             ans = tok.decode(gen_ids,
                                              skip_special_tokens=True).strip()
                             ems.append(best_subspan_em(ans, ex["answers"]))
@@ -116,7 +124,9 @@ def run(model_id, apply_seka, seka_pos, seka_neg, seka_amplify_pos, seka_amplify
                                                 ensure_ascii=False) + "\n")
                     else:
                         out = mod.generate(
-                            prompts,
+                            ids=ids,
+                            steer_mask=steering_mask,
+                            attention_mask=attention_mask,
                             max_new_tokens=max_new_tokens,
                             do_sample=False,
                             temperature=0.0,
