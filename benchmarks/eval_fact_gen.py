@@ -1,164 +1,88 @@
-"""Evaluate editors on the Counterfact benchmark."""
-import argparse
+import os
 import json
 import logging
-import os
-import random
-from functools import partial
-from pathlib import Path
-from typing import cast
-
-from benchmarks.pasta_bench import benchmarks, data, models, precompute
-from benchmarks.pasta_bench.utils import experiment_utils, logging_utils
-from pastalib import pasta
-from src.model import SEKALLM
-
-import torch
-import torch.utils.data
-from tqdm.auto import tqdm
-
+import argparse
+import datasets
+import transformers
 from torch.utils.tensorboard import SummaryWriter
+
+from benchmarks.counterfact.preprocess import load_dataset
+from benchmarks.counterfact.evaluate import (
+    counterfact_efficacy, 
+    counterfact_paraphrase, 
+    counterfact_generation
+)
 
 logger = logging.getLogger(__name__)
 
-BENCHMARKS = (
-    "efficacy",
-    "paraphrase",
-    "generation",
-)
-
-os.environ["CM_DATA_DIR"] = os.environ.get("CM_DATA_DIR", "./data/pasta_bench")
-os.environ["CM_MODELS_DIR"] = os.environ.get("CM_MODELS_DIR", "./benchmarks/pasta_bench/models")
-os.environ["CM_RESULTS_DIR"] = os.environ.get("CM_RESULTS_DIR", "./benchmarks/pasta_bench/results")
-
-
-def _prefix_context(sample: dict) -> dict:
-    """Prepend context to all prompts used in the eval."""
-    entity = sample["entity"]
-    prompt = sample["prompt"]
-    context = sample["context"]
-
-    prompt_in_context = precompute.prompt_in_context_from_sample(
-        entity, prompt, context
-    )
-
-    source = {**sample["source"]}
-    for key in ("generation_prompts", "paraphrase_prompts"):
-        source[key] = [
-            precompute.prompt_in_context_from_sample(entity, other_prompt, context)
-            for other_prompt in source[key]
-        ]
-    return {"source": source, "prompt": prompt_in_context}
-
-
-def main(args: argparse.Namespace) -> None:
+def main(args: argparse.Namespace):
     """Run the CounterFact benchmark."""
-    experiment = experiment_utils.setup_experiment(args)
-    logging_utils.configure(args=args)
-    data.disable_caching()
-    if args.debug: 
-        experiment_utils.set_ipdb_trace()
-
+    datasets.disable_caching()
+    
     # Initialize the model and tokenizer 
-    device = args.device or "cuda" if torch.cuda.is_available() else "cpu"
-
-    mt = models.load_model(args.model, device=device, fp16=args.fp16, args=args)
-    # Set up the PASTA steerer
-    if args.apply_pasta:
-        head_config = experiment_utils.read_head_config(args.pasta_head_config)
-        pasta_steerer = pasta.PASTA(
-            mt.model,
-            mt.tokenizer,
-            head_config=head_config,
-            alpha=args.alpha,
-            scale_position=args.scale_position,
-        )
-    else:
-        pasta_steerer = None
-
-
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        args.model, 
+        torch_dtype="auto",
+        device_map="auto"
+    )
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model)
+    
     # Set up the evaluation data 
     logger.info("loading several data sources")
-    if args.example_subset is not None:
-        split = f"train[{args.example_subset}]"
-    else:
-        split = "train[5000:10000]"
-    dataset = data.load_dataset("counterfact", split=split)
-    dataset = precompute.from_args(args, dataset)
-    attribute_snippets = data.load_attribute_snippets()
-    tfidf_vectorizer = data.load_counterfact_tfidf_vectorizer()
-
-    dataset = precompute.editor_inputs_from_dataset(
-            dataset=dataset,
-            mt=mt,
-            return_entity_hiddens=False,
-            return_attribute_hiddens=False,
-            return_token_ranges=False,
-            return_target_token_ids=True,
-            target_token_first_space=True if "gptj" in args.model else False, 
-            desc="precompute target token ids",
+    dataset = load_dataset(
+        data_path=args.data_path,
+        tokenizer=tokenizer,
+        attribute_no_entity=args.attribute_no_entity,
+        example_subset=args.example_subset
     )
-    dataset = dataset.map(_prefix_context, desc="prefix context")
-
-    # Set up the benchmark arguments 
-    benchmark_kwargs: dict = dict(dataset=dataset, device=device)
-
-    benchmark_kwargs["mt"] = mt
-    benchmark_kwargs["pasta_steerer"] = pasta_steerer 
-    output_dir = "{pasta}".format(
-        pasta = f"pasta-{args.alpha}-{args.scale_position}" if args.apply_pasta else "baseline",
-    )
-    if args.add_few_shot:
-        output_dir = output_dir + "_few-%d-%s"%(args.add_few_shot, str(args.few_shot_index))
-    if args.add_marker:
-        output_dir = output_dir + "_add-marker-%s"%(args.add_marker)
-    results_output_dir = (
-        experiment.results_dir 
-        / f"{args.model.split('/')[-1]}"
-        / output_dir 
-    )
-    if args.pasta_head_config is not None:
-        results_output_dir = results_output_dir / f"{args.pasta_head_config.split('/')[-1]}"
-    results_output_dir.mkdir(exist_ok=True, parents=True)
-    tb_writter = SummaryWriter(log_dir=str(results_output_dir.resolve()))
-
-    results: (
-        benchmarks.EfficacyBenchmarkResults
-        | benchmarks.CounterFactParaphraseBenchmarkResults
-        | benchmarks.CounterFactGenerationBenchmarkResults
-        | benchmarks.EssenceBenchmarkResults
-    )
-    logger.info(f"eval counterfact")
     
+    results_output_dir = args.output_dir
+    os.mkdir(results_output_dir, exist_ok=True, parents=True)
+    tb_writter = SummaryWriter(log_dir=results_output_dir)
+    
+    logger.info(f"eval counterfact")
     for benchmark_name in args.benchmarks:
-        results_file = results_output_dir / f"{benchmark_name}.json"
-        if results_file.exists() and not args.overwrite_output_dir:
+        results_file = os.path.join(results_output_dir, f"{benchmark_name}.json")
+        if os.path.exists(results_file) and not args.overwrite_output_dir:
             logger.info(
                 f"found existing {benchmark_name} results "
                 f"at {results_file}"
             )
             continue
-
-        benchmark_kwargs["add_unmediated_fact"] = args.add_unmediated_fact 
-        benchmark_kwargs["batch_size"] = args.batch_size
-        benchmark_kwargs["max_length"] = args.max_length 
-        benchmark_kwargs["add_few_shot"] = args.add_few_shot 
-        benchmark_kwargs["few_shot_index"] = args.few_shot_index 
-        benchmark_kwargs["add_marker"] = args.add_marker 
-
+        
         if benchmark_name == "efficacy":
-            results = benchmarks.counterfact_efficacy(**benchmark_kwargs)
+            results = counterfact_efficacy(
+                model=model,
+                tokenizer=tokenizer,
+                dataset=dataset,
+                batch_size=args.batch_size,
+                n_top=args.n_top,
+                max_length=args.max_length,
+                add_unmediated_fact=args.add_unmediated_fact,
+            )
         elif benchmark_name == "paraphrase":
-            results = benchmarks.counterfact_paraphrase(**benchmark_kwargs)
+            results = counterfact_paraphrase(
+                model=model,
+                tokenizer=tokenizer,
+                dataset=dataset,
+                batch_size=args.batch_size,
+                max_length=args.max_length,
+                add_unmediated_fact=args.add_unmediated_fact,
+            )
         elif benchmark_name == "generation":
-            results = benchmarks.counterfact_generation(
-                attribute_snippets=attribute_snippets,
-                tfidf_vectorizer=tfidf_vectorizer,
-                **benchmark_kwargs,
+            results = counterfact_generation(
+                model=model,
+                tokenizer=tokenizer,
+                dataset=dataset,
+                batch_size=args.batch_size,
+                max_length=args.max_length,
+                add_unmediated_fact=args.add_unmediated_fact,
+                attribute_snippets=None,
+                tfidf_vectorizer=None
             )
         else:
             raise ValueError(f"unknown benchmark: {benchmark_name}")
-
+        
         logging.info(
             f"{benchmark_name} benchmark complete! results:\n%s",
             json.dumps(results.metrics.to_dict(), indent=1),
@@ -166,16 +90,52 @@ def main(args: argparse.Namespace) -> None:
         for key, value in results.metrics.to_dict().items():
             tb_writter.add_scalar(f"{benchmark_name}/{key}", value['mean'], 1)
         
-        with results_file.open("w") as handle:
-            json.dump(results.to_dict(), handle)
+        with open(results_file, "w") as f:
+            json.dump(results.to_dict(), f)
 
-        metrics_file = results_file.parent / f"{benchmark_name}_metrics.json"
-        with metrics_file.open("w") as handle:
-            json.dump(results.metrics.to_dict(), handle)
-
-
+        metrics_file = os.path.join(results_output_dir, f"{benchmark_name}_metrics.json")
+        with open(metrics_file, "w") as f:
+            json.dump(results.metrics.to_dict(), f)
+    
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="evaluate editors")
+    BENCHMARKS = (
+        "efficacy",
+        "paraphrase",
+        "generation",
+    )
+    
+    parser = argparse.ArgumentParser(description="Evaluate CounterFact")
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        help="model name or path",
+    )
+    
+    parser.add_argument(
+        "--data_path", 
+        type=str, 
+        required=True, 
+        help="Path to the dataset"
+    )
+    parser.add_argument(
+        "--attribute-no-entity",
+        action="store_true",
+        default=False,
+        help="set context = attribute",
+    )
+    parser.add_argument(
+        "--example_subset", type=str, default=None, help="run on a subset of data"
+    )
+    
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="unique name for the experiment",
+    )
+    parser.add_argument("--overwrite_output_dir", action="store_true", help="")
+    
     parser.add_argument(
         "--benchmarks",
         "-b",
@@ -184,10 +144,10 @@ if __name__ == "__main__":
         default=BENCHMARKS,
         help="benchmarks to run, defaults depend on dataset",
     )
-    models.add_model_args(parser)
-    models.add_seka_args(parser)
-    precompute.add_preprocessing_args(parser)
-    experiment_utils.add_experiment_args(parser)
-    logging_utils.add_logging_args(parser)
+    
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size.")
+    parser.add_argument("--max_length", type=int, default=None, help="Max sequence length.")
+    parser.add_argument("--max_new_tokens", type=int, default=None, help="Max generation length.")
+
     args = parser.parse_args()
     main(args)
