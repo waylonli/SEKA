@@ -44,7 +44,7 @@ if args.chat:
             "role": "user",
             "content": args.prompt
         }],
-        # enable_thinking=True
+        enable_thinking=False
     )
 
 if "_tanh" in args.pos:
@@ -55,9 +55,6 @@ elif "_squared" in args.pos:
     feature_fn = "squared-exponential"
 else:
     feature_fn = None
-# ────────────────── helper: encode with custom markers ─────────────────
-
-
 # ────────────────── model wrapper ─────────────────────────────────────
 ks = SEKALLM(
     args.model,
@@ -77,6 +74,8 @@ ks = SEKALLM(
 ids, steering_mask, attention_mask = encode_with_markers(args.prompt, ks.tok,
                                 args.marker_start, args.marker_end)
 ids = ids.to(ks.device)
+
+print(steering_mask)
 
 # ── baseline ──────────────────────────────────────────────────────────
 baseline = ks.generate(ids, steer=False, max_new_tokens=args.max_new, attention_mask=attention_mask, do_sample=False, temperature=0.0)
