@@ -74,8 +74,8 @@ ks = SEKALLM(
 ids, steering_mask, attention_mask = encode_with_markers(args.prompt, ks.tok,
                                 args.marker_start, args.marker_end)
 ids = ids.to(ks.device)
-
-print(steering_mask)
+#
+# print(steering_mask)
 
 # ── baseline ──────────────────────────────────────────────────────────
 baseline = ks.generate(ids, steer=False, max_new_tokens=args.max_new, attention_mask=attention_mask, do_sample=False, temperature=0.0)
