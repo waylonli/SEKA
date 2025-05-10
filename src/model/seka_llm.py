@@ -194,6 +194,7 @@ class SEKALLM:
             def _hook(_, __, k_in,
                       m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
                       gp=amplify_pos, gn=amplify_neg):
+                # TODO if zero projection detected, skip projection for acceleration
                 B, T, H, D = k_in.shape
                 k_feat = phi(k_in.float(), feature_function)
                 if m is None:
