@@ -2,13 +2,12 @@ from __future__ import annotations
 import abc, argparse, json, pathlib, torch
 import os
 
+from sklearn.decomposition import PCA
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from src.utils import phi, _parse_layers
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.manifold import TSNE
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -55,6 +54,7 @@ class ProjectionBuilderBase(abc.ABC):
         ...
 
     def run(self, output_dir):
+        # TODO negative projection is problematic, should be applied to the same token as we are taken the least cross covariance!
         # 1) buffers per layer, per head
         num_layers = len(self.layers)
         n_kv       = self.model.config.num_key_value_heads
@@ -132,18 +132,19 @@ class ProjectionBuilderBase(abc.ABC):
                 kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
                 kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
-                Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
+                # TODO !!!
+                Pn = (Un[:, :kn] @ Un[:, :kn].T).to(torch.float)
 
                 # decide
-                if torch.norm(Omega_p - Omega_n) < self.min_diff:
+                if torch.norm(Hp_mat - Hn_mat) / len(Hp_mat) < self.min_diff:
                     # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
                     # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
-                    skipped.append((self.layers[L], h, torch.norm(Omega_p - Omega_n)))
+                    skipped.append((self.layers[L], h, torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
                     Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
 
                 else:
-                    applied.append((self.layers[L], h, torch.norm(Omega_p - Omega_n)))
+                    applied.append((self.layers[L], h, torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)))
 
                 Pp_heads.append(Pp)
                 Pn_heads.append(Pn)
@@ -187,9 +188,7 @@ class ProjectionBuilderBase(abc.ABC):
                         range(num_layers)}
 
         # Visualize using T-SNE
-        self.visualize_tsne_kde(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
-
-
+        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -235,51 +234,64 @@ class ProjectionBuilderBase(abc.ABC):
 
         return result
 
-    def visualize_tsne_kde(self, pos_keys, neg_keys, output_dir):
-        """
-        Visualizes the T-SNE of the positive and negative key embeddings as a KDE plot, separately for each layer and head.
 
-        Args:
-            pos_keys (np.array): The positive key embeddings.
-            neg_keys (np.array): The negative key embeddings.
-            output_dir (str): The directory where to save the plot.
-        """
+    def visualize_key_shift(self, pos_keys, neg_keys, output_dir):
+        import matplotlib as mpl
+        mpl.rcParams['font.family'] = 'serif'
+        mpl.rcParams['font.serif'] = ['Times New Roman']
         num_layers = len(self.layers)
         n_kv = self.model.config.num_key_value_heads
 
-        # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
 
-        # Loop over layers
         for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
-            # Create a subfolder for the layer
             layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]}")
             os.makedirs(layer_dir, exist_ok=True)
 
-            # Loop over heads within the current layer
             for h in range(n_kv):
-                # Get the embeddings for the current layer and head
-                pos_embeddings_2d = TSNE(n_components=2, perplexity=30, n_iter=300).fit_transform(pos_keys[L][h])
-                neg_embeddings_2d = TSNE(n_components=2, perplexity=30, n_iter=300).fit_transform(neg_keys[L][h])
+                pos = pos_keys[L][h]
+                neg = neg_keys[L][h]
 
-                # Create KDE plot
-                plt.figure(figsize=(8, 6))
+                if pos.shape[0] != neg.shape[0] or np.allclose(pos, neg, atol=1e-6):
+                    continue
 
-                # Plot KDE for positive embeddings (blue)
-                sns.kdeplot(x=pos_embeddings_2d[:, 0], y=pos_embeddings_2d[:, 1], cmap='Blues', fill=True, thresh=0,
-                            levels=10, alpha=0.5, label="Positive")
+                combined = np.concatenate([pos, neg], axis=0)
+                pca = PCA(n_components=2)
+                proj = pca.fit_transform(combined)
+                pos_proj = proj[:len(pos)]
+                neg_proj = proj[len(pos):]
 
-                # Plot KDE for negative embeddings (red)
-                sns.kdeplot(x=neg_embeddings_2d[:, 0], y=neg_embeddings_2d[:, 1], cmap='Reds', fill=True, thresh=0,
-                            levels=10, alpha=0.5, label="Negative")
+                import pdb; pdb.set_trace()
 
-                # Add labels and title
-                plt.title(f"Layer {self.layers[L]} - Head {h} - T-SNE KDE Plot of Key Embeddings")
-                plt.xlabel("t-SNE component 1")
-                plt.ylabel("t-SNE component 2")
-                plt.legend()
+                dx = pos_proj[:, 0] - neg_proj[:, 0]
+                dy = pos_proj[:, 1] - neg_proj[:, 1]
 
-                # Save the plot for this head in the layer folder
-                plt.savefig(os.path.join(layer_dir, f"Head_{h}_tsne_kde_plot.png"))
+                mean_dx = dx.mean()
+                mean_dy = dy.mean()
+                mean_start = neg_proj.mean(axis=0)
+
+                plt.figure(figsize=(10, 8))
+                plt.scatter(pos_proj[:, 0], pos_proj[:, 1], s=80, alpha=0.8, c="#006400",
+                            label='Positive')  # Bigger, darker green
+                plt.scatter(neg_proj[:, 0], neg_proj[:, 1], s=80, alpha=0.8, c="#FF6B6B",
+                            label='Negative')  # Bigger, red
+
+                plt.quiver(neg_proj[:, 0], neg_proj[:, 1], dx, dy,
+                           angles='xy', scale_units='xy', scale=1, width=0.0032,
+                           headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
+
+                plt.arrow(mean_start[0], mean_start[1], mean_dx, mean_dy,
+                          head_width=1.0, head_length=1.2, color='#003366', linewidth=3.0,  # Bolder dark blue
+                          length_includes_head=True, label='Mean shift')
+
+                plt.xlabel("PCA Component 1", fontsize=38)
+                plt.ylabel("PCA Component 2", fontsize=38)
+                plt.title(f"Layer {self.layers[L]} - Head {h} (Pairwise Shift)", fontsize=40)
+                plt.xticks([])
+                plt.yticks([])
+                plt.legend(loc='upper right', fontsize=24, frameon=False)
+                plt.tight_layout()
+                plt.savefig(os.path.join(layer_dir, f"Layer_{L}_Head_{h}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
+
 
