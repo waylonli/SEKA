@@ -11,7 +11,7 @@ from transformers import PreTrainedTokenizer
 
 from typing import TypedDict, Sequence
 
-from utils.typing_uils import StrSequence, ArrayLike, Dataset
+from benchmarks.utils.typing_uils import StrSequence, ArrayLike, Dataset
 
 def setup_logger():
     logging.basicConfig(

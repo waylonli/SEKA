@@ -3,6 +3,7 @@ import json
 import torch
 import scipy
 import numpy as np
+from functools import partial
 from pathlib import Path
 from tqdm import tqdm
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer
 from typing import Sequence, cast
 
 from benchmarks.utils.typing_uils import Dataset, ArrayLike, StrSequence
+from benchmarks.counterfact.preprocess import precompute_token_ids
 from benchmarks.utils.pasta_utils import (
     ContextMediationSample,
     Metric, 
@@ -132,13 +134,12 @@ def counterfact_evaluate(
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,  
     add_marker: str | None = None, 
+    chat: bool = False,
 ) -> CounterFactEvaluateRun:
     include_target_probs = "target_mediated" in dataset.column_names
 
     if desc is None:
         desc = f"Evaluate CounterFact"
-    if max_length is None and max_new_tokens is None:
-        max_length = DEFAULT_MAX_LENGTH
     
     exclude_columns = []
     if not return_mediated:
@@ -177,13 +178,24 @@ def counterfact_evaluate(
                 prompts = [
                     prompt.replace(attr, add_marker+attr+add_marker) for prompt,attr in zip(prompts, attributes)
                 ]
-                
+            
+            if chat:
+                logger.info("Apply chat template")
+                assert False
+                prompts = [tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                ) for prompt in prompts]
             inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
 
             outputs = model.generate(**inputs, 
                 do_sample=False,
                 return_dict_in_generate=True,
                 output_scores=True,
+                temperature=None,
+                top_k=None,
+                top_p=None,
                 max_length=max_length,
                 max_new_tokens=max_new_tokens,
             )
@@ -281,6 +293,7 @@ def counterfact_efficacy(
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
     add_marker: str | None = None, 
+    chat: bool = False,
 ):
     if desc is None:
         desc = "efficacy benchmark"
@@ -297,7 +310,8 @@ def counterfact_efficacy(
         return_mediated=return_mediated,
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
-        add_marker=add_marker
+        add_marker=add_marker,
+        chat=chat
     )
     
     target_score_key = "target_mediated_score"
@@ -365,6 +379,7 @@ def counterfact_paraphrase(
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
     add_marker: str | None = None, 
+    chat: bool = False,
 ):
     """Run the CounterFact paraphrase benchmark.
 
@@ -381,6 +396,14 @@ def counterfact_paraphrase(
     dataset = _counterfact_select_and_flatten(
         dataset, "paraphrase_prompts", desc=f"{desc} [flatten dataset]"
     )
+    dataset = dataset.map(
+        partial(precompute_token_ids,
+            tokenizer=tokenizer,
+            target_token_first_space=False,
+        ),
+        desc=f"{desc} [recompute token ids]"
+    )
+    
     efficacy_benchmark = counterfact_efficacy(
         model=model,
         tokenizer=tokenizer,
@@ -393,7 +416,8 @@ def counterfact_paraphrase(
         return_mediated=return_mediated,
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
-        add_marker=add_marker
+        add_marker=add_marker,
+        chat=chat
     )
 
     results_by_sample_id: dict = defaultdict(list)
@@ -433,7 +457,7 @@ def counterfact_paraphrase(
     )
     
 def load_attribute_snippets(
-    file: Path | None = None
+    file: str | None = None
 ) -> AttributeSnippets:
     """Load attribute snippets for different Wikipedia relations/entities.
 
@@ -453,8 +477,8 @@ def load_attribute_snippets(
         Mapping from relation ID and entity ID to Wikipedia text.
 
     """
-    with file.open("r") as handle:
-        snippets_list = json.load(handle)
+    with open(file, "r") as f:
+        snippets_list = json.load(f)
 
     attribute_snippets: AttributeSnippets = defaultdict(lambda: defaultdict(list))
     for snippets in snippets_list:
@@ -466,13 +490,13 @@ def load_attribute_snippets(
     return attribute_snippets
 
 def load_counterfact_tfidf_vectorizer(
-    idf_file: Path | None = None,
+    idf_file: str | None = None,
     vocab_file: Path | None = None,
 ) -> TfidfVectorizer:
     """Load precomputed TF-IDF statistics."""
     idf = np.load(str(idf_file))
-    with vocab_file.open("r") as handle:
-        vocab = json.load(handle)
+    with open(vocab_file, "r") as f:
+        vocab = json.load(f)
 
     # Hack borrowed from ROME:
     # https://github.com/kmeng01/rome/blob/0874014cd9837e4365f3e6f3c71400ef11509e04/dsets/tfidf_stats.py#L17
@@ -509,6 +533,8 @@ def counterfact_generation(
     tokenizer: PreTrainedTokenizer,
     dataset: Dataset,
     batch_size: int,
+    attribute_snippets: AttributeSnippets,
+    tfidf_vectorizer: TfidfVectorizer,
     desc: str | None = None,
     n_top: int = 3,
     max_length: int | None = None,
@@ -517,8 +543,7 @@ def counterfact_generation(
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
     add_marker: str | None = None, 
-    attribute_snippets: AttributeSnippets | None = None,
-    tfidf_vectorizer: TfidfVectorizer | None = None,
+    chat: bool = False,
 ) -> CounterFactGenerationBenchmarkResults:
     """Run the CounterFact generation benchmark.
 
@@ -534,17 +559,18 @@ def counterfact_generation(
         prompts = sample["source"]["generation_prompts"]
 
     """
-    if attribute_snippets is None:
-        attribute_snippets = load_attribute_snippets()
-    if tfidf_vectorizer is None:
-        tfidf_vectorizer = load_counterfact_tfidf_vectorizer()
-    if max_new_tokens is None and max_length is None:
-        max_length = DEFAULT_MAX_LENGTH
     if desc is None:
         desc = "generate benchmark"
 
     dataset = _counterfact_select_and_flatten(
         dataset, "generation_prompts", desc=f"{desc} [flatten dataset]"
+    )
+    dataset = dataset.map(
+        partial(precompute_token_ids,
+            tokenizer=tokenizer,
+            target_token_first_space=False,
+        ),
+        desc=f"{desc} [recompute token ids]"
     )
 
     run = counterfact_evaluate(
@@ -559,7 +585,8 @@ def counterfact_generation(
         return_mediated=return_mediated,
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
-        add_marker=add_marker
+        add_marker=add_marker,
+        chat=chat
     )
     generations_key = "generations"
     run_results_by_id = _group_results_by_id(run)

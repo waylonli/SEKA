@@ -55,7 +55,7 @@ def _as_fp32(data: dict) -> dict:
         for key, value in data.items()
     }
 
-def _precompute_token_ids(
+def precompute_token_ids(
     sample: ContextMediationInput,
     tokenizer: PreTrainedTokenizer,
     target_token_first_space: bool = False, 
@@ -94,7 +94,7 @@ def load_dataset(
         )
     
     dataset = dataset.map(
-        partial(_precompute_token_ids,
+        partial(precompute_token_ids,
             tokenizer=tokenizer,
             fp32=True,
             target_token_first_space=False,
