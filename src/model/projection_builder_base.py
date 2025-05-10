@@ -188,7 +188,7 @@ class ProjectionBuilderBase(abc.ABC):
                         range(num_layers)}
 
         # Visualize using T-SNE
-        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -260,8 +260,6 @@ class ProjectionBuilderBase(abc.ABC):
                 proj = pca.fit_transform(combined)
                 pos_proj = proj[:len(pos)]
                 neg_proj = proj[len(pos):]
-
-                import pdb; pdb.set_trace()
 
                 dx = pos_proj[:, 0] - neg_proj[:, 0]
                 dy = pos_proj[:, 1] - neg_proj[:, 1]
