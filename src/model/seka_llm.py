@@ -160,14 +160,14 @@ class SEKALLM:
         file_layers, P_pos_stack = _load_proj(pos_pt, dev)  # → (L_sel,H,d,d)
         sel_layers = _parse_layers(layers, n_layers)
         if P_pos_stack.ndim != 4:
-            raise ValueError("Expected 4‑D pos_proj")
+            raise ValueError("Expected 4-D pos_proj")
         # map layer→(H,d,d)
         P_pos = {layer: P_pos_stack[i].to(dtype) for i, layer in enumerate(sel_layers)}
 
         if neg_pt:
             _, P_neg_stack = _load_proj(neg_pt, dev)
             if P_neg_stack.ndim != 4:
-                raise ValueError("Expected 4‑D neg_proj")
+                raise ValueError("Expected 4-D neg_proj")
             P_neg = {layer: P_neg_stack[i].to(dtype) for i, layer in enumerate(sel_layers)}
         else:
             P_neg = None

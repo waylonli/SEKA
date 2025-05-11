@@ -69,10 +69,12 @@ class ProjectionBuilderBase(abc.ABC):
                 # assemble texts
                 if self.chat:
                     text_H = self.tokenizer.apply_chat_template([{"role":"user","content":ctx}], tokenize=False)
-                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
-                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hp = self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hn = self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
                 else:
-                    text_H, text_Hp, text_Hn = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}", f"Question: {irr_q}\nContext: {ctx}"
+                    text_H = f"Context: {ctx} "
+                    text_Hp = f"Question: {rel_q}\nContext: {ctx}"
+                    text_Hn = f"Question: {irr_q}\nContext: {ctx}"
 
                 # find answer token indices
                 idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
@@ -110,6 +112,7 @@ class ProjectionBuilderBase(abc.ABC):
         for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
             for h in range(n_kv):
+                # (seq_len, head_dim)
                 H_mat  = torch.cat(buf_H[L][h],  0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
                 Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
@@ -125,15 +128,27 @@ class ProjectionBuilderBase(abc.ABC):
                 P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float)
 
                 # cross-cov → Pp, Pn
+                # TODO: chat models have different lengths, so the matmul failed.
+                # Omega: (head_dim, head_dim)
                 Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
                 Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
                 Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
                 Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
-                kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
-                kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
+                # kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
+                # kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
+                # Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
+                # # TODO(nyc): range should be [-kn:] according to paper?
+                # Pn = (Un[:, :kn] @ Un[:, :kn].T).to(torch.float)
+                
+                ### Possible fix
+                # S is a vector
+                # TODO: square may not necessary as S is non-neg
+                normalised_Sp = Sp / torch.sum(Sp) 
+                kp = torch.sum(torch.cumsum(normalised_Sp) < self.top_pct).item() + 1
+                normalised_Sn = Sn / torch.sum(Sn) 
+                kn = torch.sum(torch.cumsum(normalised_Sn) < self.top_pct).item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
-                # TODO !!!
-                Pn = (Un[:, :kn] @ Un[:, :kn].T).to(torch.float)
+                Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
                 # decide
                 if torch.norm(Hp_mat - Hn_mat) / len(Hp_mat) < self.min_diff:
@@ -159,7 +174,6 @@ class ProjectionBuilderBase(abc.ABC):
         # save
         os.makedirs(output_dir, exist_ok=True)
 
-
         torch.save({'layers': self.layers, 'proj': pos_proj.cpu()}, os.path.join(output_dir,
                          f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
                 output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
@@ -181,13 +195,13 @@ class ProjectionBuilderBase(abc.ABC):
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
-        # Convert to numpy arrays
-        all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
-                        range(num_layers)}
-        all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
-                        range(num_layers)}
+        # # Convert to numpy arrays
+        # all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
+        # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
 
-        # Visualize using T-SNE
+        # # Visualize using T-SNE
         # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
     @staticmethod
@@ -201,8 +215,7 @@ class ProjectionBuilderBase(abc.ABC):
         return [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= end]
 
     @staticmethod
-    def extract_keys(model, tokenizer, text: str, indices: list[int], layers: list[int], feature: str) -> list[
-        torch.Tensor]:
+    def extract_keys(model, tokenizer, text: str, indices: list[int], layers: list[int], feature: str) -> list[torch.Tensor]:
         inputs = tokenizer(text, return_tensors='pt', add_special_tokens=False).to(model.device)
         outputs = model(**inputs, use_cache=False, output_hidden_states=True)
         hiddens = outputs.hidden_states
