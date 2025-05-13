@@ -210,20 +210,20 @@ class SEKALLM:
 
                 k_out = k_feat.clone()
                 for b in range(B):
-                    pos_idx = m[b].nonzero(as_tuple=True)[0]
-                    neg_idx = (~m[b]).nonzero(as_tuple=True)[0]
+                    highlighted_idx = m[b].nonzero(as_tuple=True)[0]
+                    # neg_idx = (~m[b]).nonzero(as_tuple=True)[0]
 
                     for h in range(H):
-                        if pos_idx.numel():
-                            kb = k_feat[b, pos_idx, h]
-                            kb = kb + gp * (kb @ Pp[h])
-                            # kb = kb @ Pp[h]
-                            k_out[b, pos_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
-                        if Pn is not None and neg_idx.numel():
-                            kb = k_feat[b, neg_idx, h]
-                            kb = kb + gn * (kb @ Pn[h])
-                            # kb = kb @ Pn[h]
-                            k_out[b, neg_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
+                        if highlighted_idx.numel():
+                            kb = k_feat[b, highlighted_idx, h]
+                            if Pn is not None:
+                                kb = kb + ((gp * (kb @ Pp[h]) + gn * (kb @ Pn[h])) / 2)
+                            k_out[b, highlighted_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
+                        # if Pn is not None and neg_idx.numel():
+                        #     kb = k_feat[b, neg_idx, h]
+                        #     kb = kb + gn * (kb @ Pn[h])
+                        #     # kb = kb @ Pn[h]
+                        #     k_out[b, neg_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
                 return k_out.to(k_in.dtype)
 
             self._hooks.append(mod.register_forward_hook(_hook))

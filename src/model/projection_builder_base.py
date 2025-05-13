@@ -141,9 +141,9 @@ class ProjectionBuilderBase(abc.ABC):
                 # S is a vector
                 # TODO: square may not necessary as S is non-neg
                 normalised_Sp = Sp / torch.sum(Sp)
-                kp = torch.sum(torch.cumsum(normalised_Sp) < self.top_pct).item() + 1
+                kp = torch.sum(normalised_Sp.cumsum(0) < self.top_pct).item() + 1
                 normalised_Sn = Sn / torch.sum(Sn)
-                kn = torch.sum(torch.cumsum(normalised_Sn) < self.top_pct).item() + 1
+                kn = torch.sum(normalised_Sn.cumsum(0) < self.top_pct).item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
@@ -289,7 +289,7 @@ class ProjectionBuilderBase(abc.ABC):
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
                 plt.arrow(mean_start[0], mean_start[1], mean_dx, mean_dy,
-                          head_width=0.5, head_length=0.5, color='#003366', linewidth=5.0,  # Bolder dark blue
+                          head_width=0.5, head_length=0.5, color='pip install -U kaleido', linewidth=5.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
                 plt.xlabel("PCA Component 1", fontsize=38)
