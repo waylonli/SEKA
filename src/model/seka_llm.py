@@ -218,6 +218,8 @@ class SEKALLM:
                             kb = k_feat[b, highlighted_idx, h]
                             if Pn is not None:
                                 kb = kb + ((gp * (kb @ Pp[h]) + gn * (kb @ Pn[h])) / 2)
+                            else:
+                                kb = kb + gp * (kb @ Pp[h])
                             k_out[b, highlighted_idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
                         # if Pn is not None and neg_idx.numel():
                         #     kb = k_feat[b, neg_idx, h]
