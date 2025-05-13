@@ -112,7 +112,6 @@ class ProjectionBuilderBase(abc.ABC):
         for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
             for h in range(n_kv):
-                # (seq_len, head_dim)
                 H_mat  = torch.cat(buf_H[L][h],  0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
                 Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
@@ -128,8 +127,6 @@ class ProjectionBuilderBase(abc.ABC):
                 P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float)
 
                 # cross-cov → Pp, Pn
-                # TODO: chat models have different lengths, so the matmul failed.
-                # Omega: (head_dim, head_dim)
                 Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
                 Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
                 Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
@@ -139,13 +136,13 @@ class ProjectionBuilderBase(abc.ABC):
                 # Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 # # TODO(nyc): range should be [-kn:] according to paper?
                 # Pn = (Un[:, :kn] @ Un[:, :kn].T).to(torch.float)
-                
+
                 ### Possible fix
                 # S is a vector
                 # TODO: square may not necessary as S is non-neg
-                normalised_Sp = Sp / torch.sum(Sp) 
+                normalised_Sp = Sp / torch.sum(Sp)
                 kp = torch.sum(torch.cumsum(normalised_Sp) < self.top_pct).item() + 1
-                normalised_Sn = Sn / torch.sum(Sn) 
+                normalised_Sn = Sn / torch.sum(Sn)
                 kn = torch.sum(torch.cumsum(normalised_Sn) < self.top_pct).item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
@@ -201,8 +198,8 @@ class ProjectionBuilderBase(abc.ABC):
         # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
         #                 range(num_layers)}
 
-        # # Visualize using T-SNE
-        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+        # Visualize using PCA
+        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -258,7 +255,7 @@ class ProjectionBuilderBase(abc.ABC):
         os.makedirs(output_dir, exist_ok=True)
 
         for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
-            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]}")
+            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]+1}")
             os.makedirs(layer_dir, exist_ok=True)
 
             for h in range(n_kv):
@@ -292,17 +289,17 @@ class ProjectionBuilderBase(abc.ABC):
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
                 plt.arrow(mean_start[0], mean_start[1], mean_dx, mean_dy,
-                          head_width=1.0, head_length=1.2, color='#003366', linewidth=3.0,  # Bolder dark blue
+                          head_width=0.5, head_length=0.5, color='#003366', linewidth=5.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
                 plt.xlabel("PCA Component 1", fontsize=38)
                 plt.ylabel("PCA Component 2", fontsize=38)
-                plt.title(f"Layer {self.layers[L]} - Head {h} (Pairwise Shift)", fontsize=40)
+                plt.title(f"Layer {self.layers[L]+1} - Head {h+1} (Pairwise Shift)", fontsize=40)
                 plt.xticks([])
                 plt.yticks([])
                 plt.legend(loc='upper right', fontsize=24, frameon=False)
                 plt.tight_layout()
-                plt.savefig(os.path.join(layer_dir, f"Layer_{L}_Head_{h}_pca_pairwise_shift.pdf"), dpi=300)
+                plt.savefig(os.path.join(layer_dir, f"Layer_{L+1}_Head_{h+1}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
 
 

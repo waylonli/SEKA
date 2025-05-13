@@ -1,8 +1,8 @@
-baukit==0.0.1
 dataclasses_json==0.6.7
 datasets==3.5.1
 evaluation==0.0.2
 ipdb==0.13.13
+matplitlib==3.8
 nltk==3.9.1
 numpy==1.22.4
 pastalib==0.1.3
