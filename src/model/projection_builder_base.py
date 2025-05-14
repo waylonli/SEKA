@@ -192,11 +192,11 @@ class ProjectionBuilderBase(abc.ABC):
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
-        # # Convert to numpy arrays
-        # all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
-        #                 range(num_layers)}
-        # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
-        #                 range(num_layers)}
+        # Convert to numpy arrays
+        all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
+        all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
 
         # Visualize using PCA
         self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
@@ -289,7 +289,7 @@ class ProjectionBuilderBase(abc.ABC):
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
                 plt.arrow(mean_start[0], mean_start[1], mean_dx, mean_dy,
-                          head_width=0.5, head_length=0.5, color='pip install -U kaleido', linewidth=5.0,  # Bolder dark blue
+                          head_width=0.5, head_length=0.5, color='#003366', linewidth=5.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
                 plt.xlabel("PCA Component 1", fontsize=38)
