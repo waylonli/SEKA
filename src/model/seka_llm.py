@@ -64,13 +64,61 @@ class SEKALLM:
         # expose everything from the HF model
         object.__setattr__(self, "__getattr__", lambda n: getattr(self.model, n))
 
-    # ───────────── public helpers ──────────────────────────────────────
     @property
-    def device(self):
-        # works for sharded, DP, single‑GPU or CPU
-        return next(self.model.parameters()).device
+    def device(self):  # convenience
+        return self.model.device
 
-    # (generate unchanged except for one‑liner that grabs self.device – omitted for brevity)
+    def generate(self,
+                 ids: torch.LongTensor | str,
+                 steer: bool = True,
+                 steer_mask: torch.Tensor | None = None,
+                 attention_mask: torch.Tensor | None = None,
+                 return_raw: bool = False,
+                 **gen_kw) -> str:
+
+        # TODO Seems there are some bugs for the batch decoding, check steer mask and projection multiplication
+        if isinstance(ids, (str, list)):
+            ids, steer_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
+            ids = ids.to(self.device)
+            # check decoded ids
+            steer_mask = steer_mask.to(self.device)
+            attention_mask = attention_mask.to(self.device)
+        elif isinstance(ids, torch.Tensor):
+            if steer:
+                assert steer_mask is not None, "steer_mask must be provided if ids is a tensor"
+                steer_mask = steer_mask.to(self.device)
+
+        if attention_mask is not None:
+            attention_mask = attention_mask.unsqueeze(0) if attention_mask.ndim == 1 else attention_mask
+            attention_mask = attention_mask.to(self.device)
+
+        # -------- optional steering --------
+        if steer:
+            self.attach_projection(steer_mask_tensor=steer_mask, silence=True)
+        else:
+            self.remove_projection()
+
+        if "attention_mask" not in gen_kw and attention_mask is not None:
+            gen_kw["attention_mask"] = attention_mask
+
+        out = self.model.generate(
+            ids,
+            **gen_kw
+        )
+
+        if steer:
+            self.remove_projection()
+
+        if return_raw:
+            return out
+
+        generated = []
+        for i in range(ids.size(0)):
+            generated.append(
+                self.tok.decode(out[i, ids.size(1):], skip_special_tokens=True)
+            )
+
+        return generated[0] if len(generated) == 1 else generated
 
     # ───────────── steering ────────────────────────────────────────────
     def attach_projection(
