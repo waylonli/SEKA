@@ -69,12 +69,10 @@ class ProjectionBuilderBase(abc.ABC):
                 # assemble texts
                 if self.chat:
                     text_H = self.tokenizer.apply_chat_template([{"role":"user","content":ctx}], tokenize=False)
-                    text_Hp = self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
-                    text_Hn = self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
                 else:
-                    text_H = f"Context: {ctx} "
-                    text_Hp = f"Question: {rel_q}\nContext: {ctx}"
-                    text_Hn = f"Question: {irr_q}\nContext: {ctx}"
+                    text_H, text_Hp, text_Hn = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}", f"Question: {irr_q}\nContext: {ctx}"
 
                 # find answer token indices
                 idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
@@ -131,19 +129,8 @@ class ProjectionBuilderBase(abc.ABC):
                 Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
                 Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
                 Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
-                # kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
-                # kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
-                # Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
-                # # TODO(nyc): range should be [-kn:] according to paper?
-                # Pn = (Un[:, :kn] @ Un[:, :kn].T).to(torch.float)
-
-                ### Possible fix
-                # S is a vector
-                # TODO: square may not necessary as S is non-neg
-                normalised_Sp = Sp / torch.sum(Sp)
-                kp = torch.sum(normalised_Sp.cumsum(0) < self.top_pct).item() + 1
-                normalised_Sn = Sn / torch.sum(Sn)
-                kn = torch.sum(normalised_Sn.cumsum(0) < self.top_pct).item() + 1
+                kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
+                kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
@@ -171,6 +158,7 @@ class ProjectionBuilderBase(abc.ABC):
         # save
         os.makedirs(output_dir, exist_ok=True)
 
+
         torch.save({'layers': self.layers, 'proj': pos_proj.cpu()}, os.path.join(output_dir,
                          f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
                 output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
@@ -192,14 +180,14 @@ class ProjectionBuilderBase(abc.ABC):
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
-        # # Convert to numpy arrays
-        # all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
-        #                 range(num_layers)}
-        # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
-        #                 range(num_layers)}
+        # Convert to numpy arrays
+        all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
+        all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+                        range(num_layers)}
 
-        # Visualize using PCA
-        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+        # Visualize using T-SNE
+        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -212,7 +200,8 @@ class ProjectionBuilderBase(abc.ABC):
         return [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= end]
 
     @staticmethod
-    def extract_keys(model, tokenizer, text: str, indices: list[int], layers: list[int], feature: str) -> list[torch.Tensor]:
+    def extract_keys(model, tokenizer, text: str, indices: list[int], layers: list[int], feature: str) -> list[
+        torch.Tensor]:
         inputs = tokenizer(text, return_tensors='pt', add_special_tokens=False).to(model.device)
         outputs = model(**inputs, use_cache=False, output_hidden_states=True)
         hiddens = outputs.hidden_states
@@ -255,7 +244,7 @@ class ProjectionBuilderBase(abc.ABC):
         os.makedirs(output_dir, exist_ok=True)
 
         for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
-            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]+1}")
+            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]}")
             os.makedirs(layer_dir, exist_ok=True)
 
             for h in range(n_kv):
@@ -288,18 +277,18 @@ class ProjectionBuilderBase(abc.ABC):
                            angles='xy', scale_units='xy', scale=1, width=0.0032,
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
-                plt.arrow(mean_start[0], mean_start[1], mean_dx, mean_dy,
-                          head_width=0.5, head_length=0.5, color='pip install -U kaleido', linewidth=5.0,  # Bolder dark blue
+                plt.arrow(mean_start[0], mean_start[1], 2*mean_dx, 2*mean_dy,
+                          head_width=1.0, head_length=1.2, color='#003366', linewidth=3.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
                 plt.xlabel("PCA Component 1", fontsize=38)
                 plt.ylabel("PCA Component 2", fontsize=38)
-                plt.title(f"Layer {self.layers[L]+1} - Head {h+1} (Pairwise Shift)", fontsize=40)
+                plt.title(f"Layer {self.layers[L]} - Head {h} (Pairwise Shift)", fontsize=40)
                 plt.xticks([])
                 plt.yticks([])
                 plt.legend(loc='upper right', fontsize=24, frameon=False)
                 plt.tight_layout()
-                plt.savefig(os.path.join(layer_dir, f"Layer_{L+1}_Head_{h+1}_pca_pairwise_shift.pdf"), dpi=300)
+                plt.savefig(os.path.join(layer_dir, f"Layer_{L}_Head_{h}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
 
 

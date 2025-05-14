@@ -38,10 +38,10 @@ def chat_prompt(ex, prefix):
     return [{"role": "user", "content": user}]
 
 def base_prompt(ex, prefix):
-    ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
-          "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
-          "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
-    # ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
+    # ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
+    #       "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+    #       "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
+    ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
     prefix_str = "**Pay more attention to the context in the middle.** " if prefix else ""
     return (
         f"{prefix_str}Directly answer in one short phrase without any other word.\n\n"
