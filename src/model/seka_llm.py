@@ -76,7 +76,6 @@ class SEKALLM:
                  return_raw: bool = False,
                  **gen_kw) -> str:
 
-        # TODO Seems there are some bugs for the batch decoding, check steer mask and projection multiplication
         if isinstance(ids, (str, list)):
             ids, steer_mask, attention_mask = encode_with_markers(ids, self.tok, self.m_start, self.m_end)
             ids = ids.to(self.device)
