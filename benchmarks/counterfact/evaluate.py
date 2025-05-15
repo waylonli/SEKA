@@ -25,6 +25,9 @@ from benchmarks.utils.pasta_utils import (
     weighted_n_gram_entropy
 )
 
+from src.model import SEKALLM
+from src.utils import encode_with_markers
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_LENGTH = 128
@@ -122,7 +125,7 @@ class CounterFactGenerationBenchmarkResults(DataClassJsonMixin):
 
 @torch.inference_mode()
 def counterfact_evaluate(
-    model: PreTrainedModel,
+    model: PreTrainedModel | SEKALLM,
     tokenizer: PreTrainedTokenizer,
     dataset: Dataset,
     batch_size: int,
@@ -133,8 +136,11 @@ def counterfact_evaluate(
     return_mediated: bool = True,
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,  
-    add_marker: str | None = None, 
+    add_marker: bool = False, 
+    marker_start: str | None = None,
+    marker_end: str | None = None,
     chat: bool = False,
+    seka: bool = False,
 ) -> CounterFactEvaluateRun:
     include_target_probs = "target_mediated" in dataset.column_names
 
@@ -176,29 +182,53 @@ def counterfact_evaluate(
                 
             if add_marker is not None:
                 prompts = [
-                    prompt.replace(attr, add_marker+attr+add_marker) for prompt,attr in zip(prompts, attributes)
+                    prompt.replace(attr, marker_start+attr+marker_end) 
+                    for prompt, attr in zip(prompts, attributes)
                 ]
             
             if chat:
-                logger.info("Apply chat template")
-                assert False
                 prompts = [tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     tokenize=False,
                     add_generation_prompt=True,
                 ) for prompt in prompts]
-            inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
-
-            outputs = model.generate(**inputs, 
-                do_sample=False,
-                return_dict_in_generate=True,
-                output_scores=True,
-                temperature=None,
-                top_k=None,
-                top_p=None,
-                max_length=max_length,
-                max_new_tokens=max_new_tokens,
-            )
+            
+            if seka:
+                ids, steering_mask, attention_mask = encode_with_markers(
+                    prompts, tokenizer,
+                    marker_start, marker_end
+                )
+                ids = ids.to(model.device)
+                
+                outputs = model.generate(
+                    ids,
+                    steer=True,
+                    return_raw=True,
+                    steer_mask=steering_mask,
+                    attention_mask=attention_mask,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    temperature=None,
+                    top_k=None,
+                    top_p=None,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+            else:
+                inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
+                outputs = model.generate(**inputs, 
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    temperature=None,
+                    top_k=None,
+                    top_p=None,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
                 
             batched_results: dict = {}
             first_token_logps = torch.log_softmax(outputs.scores[0], dim=-1)
@@ -292,8 +322,11 @@ def counterfact_efficacy(
     return_mediated: bool = True,
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
-    add_marker: str | None = None, 
+    add_marker: bool = False, 
+    marker_start: str | None = None,
+    marker_end: str | None = None,
     chat: bool = False,
+    seka: bool = False,
 ):
     if desc is None:
         desc = "efficacy benchmark"
@@ -311,7 +344,10 @@ def counterfact_efficacy(
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
         add_marker=add_marker,
-        chat=chat
+        marker_start=marker_start,
+        marker_end=marker_end,
+        chat=chat,
+        seka=seka,
     )
     
     target_score_key = "target_mediated_score"
@@ -378,8 +414,11 @@ def counterfact_paraphrase(
     return_mediated: bool = True,
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
-    add_marker: str | None = None, 
+    add_marker: bool = False, 
+    marker_start: str | None = None,
+    marker_end: str | None = None,
     chat: bool = False,
+    seka: bool = False,
 ):
     """Run the CounterFact paraphrase benchmark.
 
@@ -417,7 +456,10 @@ def counterfact_paraphrase(
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
         add_marker=add_marker,
-        chat=chat
+        marker_start=marker_start,
+        marker_end=marker_end,
+        chat=chat,
+        seka=seka,
     )
 
     results_by_sample_id: dict = defaultdict(list)
@@ -542,8 +584,11 @@ def counterfact_generation(
     return_mediated: bool = True,
     return_unmediated: bool = True,
     add_unmediated_fact: bool = True,
-    add_marker: str | None = None, 
+    add_marker: bool = False, 
+    marker_start: str | None = None,
+    marker_end: str | None = None,
     chat: bool = False,
+    seka: bool = False,
 ) -> CounterFactGenerationBenchmarkResults:
     """Run the CounterFact generation benchmark.
 
@@ -586,7 +631,10 @@ def counterfact_generation(
         return_unmediated=return_unmediated,
         add_unmediated_fact=add_unmediated_fact,
         add_marker=add_marker,
-        chat=chat
+        marker_start=marker_start,
+        marker_end=marker_end,
+        chat=chat,
+        seka=seka,
     )
     generations_key = "generations"
     run_results_by_id = _group_results_by_id(run)

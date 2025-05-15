@@ -1,6 +1,6 @@
 from __future__ import annotations
 import torch, types
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 from src.utils import encode_with_markers, _parse_layers, _load_proj, phi, phi_inv
 
 class SEKALLM:
@@ -29,18 +29,18 @@ class SEKALLM:
 
         # ----- HF objects -----
         self.name_or_path = f"SEKA-{model_or_path}"
-        self.tok = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
+        self.tok: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
 
         if multi_gpu:
             # shard across all GPUs
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path,
                 device_map="auto",
                 use_cache=False,
                 **hf_kwargs
             ).eval()
         else:
-            self.model = AutoModelForCausalLM.from_pretrained(
+            self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path,
                 use_cache=False,
                 **hf_kwargs
@@ -202,7 +202,7 @@ class SEKALLM:
                                 kb = kb + ((gp * (kb @ Pp[h]) + gn * (kb @ Pn[h])) / 2)
                             else:
                                 kb = kb + gp * (kb @ Pp[h])
-                            k_out[b, idx, h] = phi_inv(kb, feature_function).to(k_in.dtype)
+                            k_out[b, idx, h] = phi_inv(kb, feature_function).to(k_out.dtype)
                 return k_out.to(k_in.dtype)
 
             self._hooks.append(mod.register_forward_hook(_hook))
