@@ -30,7 +30,8 @@ from src.utils import encode_with_markers
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_LENGTH = 128
+DEFAULT_MAX_LENGTH = 300
+DEFAULT_MAX_LENGTH_ERROR_CORRECTION = 150
 
 AttributeSnippets = dict[str, dict[str, list[dict]]]
 
@@ -146,6 +147,9 @@ def counterfact_evaluate(
 
     if desc is None:
         desc = f"Evaluate CounterFact"
+        
+    if max_length is None and max_new_tokens is None:
+        max_length = DEFAULT_MAX_LENGTH
     
     exclude_columns = []
     if not return_mediated:
@@ -194,18 +198,10 @@ def counterfact_evaluate(
                 ) for prompt in prompts]
             
             if seka:
-                ids, steering_mask, attention_mask = encode_with_markers(
-                    prompts, tokenizer,
-                    marker_start, marker_end
-                )
-                ids = ids.to(model.device)
-                
                 outputs = model.generate(
-                    ids,
+                    ids=prompts,
                     steer=True,
                     return_raw=True,
-                    steer_mask=steering_mask,
-                    attention_mask=attention_mask,
                     do_sample=False,
                     return_dict_in_generate=True,
                     output_scores=True,
@@ -330,6 +326,9 @@ def counterfact_efficacy(
 ):
     if desc is None:
         desc = "efficacy benchmark"
+        
+    # Overwrite max_new_tokens
+    max_new_tokens = 1
     
     run = counterfact_evaluate(
         model=model,
@@ -606,6 +605,8 @@ def counterfact_generation(
     """
     if desc is None:
         desc = "generate benchmark"
+    if max_new_tokens is None and max_length is None:
+        max_length = DEFAULT_MAX_LENGTH
 
     dataset = _counterfact_select_and_flatten(
         dataset, "generation_prompts", desc=f"{desc} [flatten dataset]"

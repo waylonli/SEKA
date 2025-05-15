@@ -100,6 +100,10 @@ def load_dataset(
             target_token_first_space=False,
         ),
         desc="precompute target token ids",
+        batched=True,
+        batch_size=64,
+        keep_in_memory=True,
+        num_proc=1,
     )
     dataset = dataset.map(_prefix_context, desc="prefix context")
     return dataset
