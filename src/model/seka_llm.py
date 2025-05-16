@@ -1,5 +1,5 @@
 from __future__ import annotations
-import torch, types
+import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 from src.utils import encode_with_markers, _parse_layers, _load_proj, phi, phi_inv
 
@@ -110,12 +110,11 @@ class SEKALLM:
 
         if return_raw:
             return out
-
-        generated = []
-        for i in range(ids.size(0)):
-            generated.append(
-                self.tok.decode(out[i, ids.size(1):], skip_special_tokens=True)
-            )
+        
+        generated_ids = [
+            output_ids[len(input_ids):] for input_ids, output_ids in zip(ids, out)
+        ]
+        generated = self.tok.batch_decode(generated_ids, skip_special_tokens=True)
 
         return generated[0] if len(generated) == 1 else generated
 
@@ -169,43 +168,40 @@ class SEKALLM:
 
         # register hooks
         for L in sel_layers:
-            Pp_layer = P_pos[L]       # (H,d,d)
-            Pn_layer = P_neg[L] if P_neg else None
             attn = root.model.layers[L].self_attn
             mod  = attn.k_norm if hasattr(attn, "k_norm") else attn.k_proj
-
+            
+            # Move tensors to layer's device
+            layer_device = next(mod.parameters()).device
+            m_dev = m_dev.to(layer_device) if m_dev is not None else None
+            Pp_layer = P_pos[L].to(layer_device) # (H, D, D)
+            Pn_layer = P_neg[L].to(layer_device) if P_neg else None
+                
             def _hook(_, __, k_in,
-                      m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
-                      gp=amplify_pos, gn=amplify_neg):
-                # move tensors to the layer’s device
-                dev = k_in.device
-                m  = None if m is None else m.to(dev)
-                Pp = Pp.to(dev)
-                Pn = None if Pn is None else Pn.to(dev)
-
-                if Pp.sum() == 0:
-                    # print("[Key-Steering] No projection applied")
-                    # print(Pp)
+                m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
+                gp=amplify_pos, gn=amplify_neg
+            ):
+                B, T, H, D = k_in.shape
+                if (Pp.sum() == 0 # if nothing to do, return
+                    or m is None or m.shape != (B, T) or m.sum() == 0): # if no mask or mask all zero, return
                     return k_in
 
-                B, T, H, D = k_in.shape
-                k_feat = phi(k_in.float(), feature_function)
+                k_feat = phi(k_in, feature_function) # -> (B, T, H, D)
+                
+                # Projection
+                k_sel = k_feat[m].to(Pp.dtype) # (N_sel, H, D)
+                pos = torch.einsum('n h d, h d k -> n h k', k_sel, Pp) # k @ Pp
+                if Pn is not None:
+                    neg = torch.einsum('n h d, h d k -> n h k', k_sel, Pn) # k @ Pn
+                    delta = (gp * pos + gn * neg) / 2
+                else:
+                    delta = gp * pos
+                
+                # Apply delta
+                k_feat[m] += delta.to(k_feat.dtype)
+                k_out = phi_inv(k_feat, feature_function)
 
-                if m is None or m.shape != (B, T) or m.sum() == 0:
-                    return phi_inv(k_feat, feature_function).to(k_in.dtype)
-
-                k_out = k_feat.clone()
-                for b in range(B):
-                    idx = m[b].nonzero(as_tuple=True)[0]
-                    if idx.numel():
-                        for h in range(H):
-                            kb = k_feat[b, idx, h]
-                            if Pn is not None:
-                                kb = kb + ((gp * (kb @ Pp[h]) + gn * (kb @ Pn[h])) / 2)
-                            else:
-                                kb = kb + gp * (kb @ Pp[h])
-                            k_out[b, idx, h] = phi_inv(kb, feature_function).to(k_out.dtype)
-                return k_out.to(k_in.dtype)
+                return k_out
 
             self._hooks.append(mod.register_forward_hook(_hook))
 
