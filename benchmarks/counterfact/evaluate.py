@@ -184,7 +184,7 @@ def counterfact_evaluate(
                     new_prompts.append(new_prompt)
                 prompts = new_prompts
                 
-            if add_marker is not None:
+            if add_marker:
                 prompts = [
                     prompt.replace(attr, marker_start+attr+marker_end) 
                     for prompt, attr in zip(prompts, attributes)
@@ -439,7 +439,11 @@ def counterfact_paraphrase(
             tokenizer=tokenizer,
             target_token_first_space=False,
         ),
-        desc=f"{desc} [recompute token ids]"
+        desc=f"{desc} [recompute token ids]",
+        batched=True,
+        batch_size=64,
+        keep_in_memory=True,
+        num_proc=1,
     )
     
     efficacy_benchmark = counterfact_efficacy(
@@ -616,7 +620,11 @@ def counterfact_generation(
             tokenizer=tokenizer,
             target_token_first_space=False,
         ),
-        desc=f"{desc} [recompute token ids]"
+        desc=f"{desc} [recompute token ids]",
+        batched=True,
+        batch_size=64,
+        keep_in_memory=True,
+        num_proc=1,
     )
 
     run = counterfact_evaluate(

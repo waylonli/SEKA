@@ -50,9 +50,6 @@ def main(args: argparse.Namespace):
             device="auto"
         )
         tokenizer = model.tok
-        
-        if args.marker_end is None:
-            args.marker_end = args.marker_start
             
         # Force add_marker flag to be True
         if not args.add_marker:
@@ -83,6 +80,8 @@ def main(args: argparse.Namespace):
     results_output_dir.mkdir(exist_ok=True, parents=True)
     
     logger.info(f"eval counterfact")
+    if args.marker_end is None:
+        args.marker_end = args.marker_start
     for benchmark_name in args.benchmarks:
         results_file = results_output_dir / f"{benchmark_name}.json"
         if results_file.exists() and not args.overwrite_output_dir:

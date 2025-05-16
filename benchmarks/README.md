@@ -12,12 +12,13 @@ python -W ignore -m nltk.downloader punkt cmudict punkt_tab
 python benchmarks/counterfact/download.py --path data/counterfact
 ```
 ### Run
+Baseline
 ```
 python benchmarks/eval_fact_gen.py \
-    --model Qwen/Qwen3-8B \
+    --model {model-name-or-path} \
     --data_path data/counterfact \
     --add_unmediated_fact True \
     --benchmarks efficacy paraphrase generation \
-    --output_dir results/counterfact/Qwen3-8B \
-    --max_new_tokens 128
+    --output_dir {path-to-output-dir} \
+    --overwrite_output_dir
 ```
