@@ -14,7 +14,7 @@ def encode_with_markers(text: Union[str, List[str]],
     padded to the longest sequence in the batch.
     """
     if isinstance(text, str):
-            text = [text]  # unify to a batch
+        text = [text]  # unify to a batch
 
     ids_lst, steer_lst, attn_lst = [], [], []
     pattern = re.escape(m_start) + r'(.*?)' + re.escape(m_end)

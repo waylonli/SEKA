@@ -5,7 +5,8 @@ import argparse
 import datasets
 import transformers
 from pathlib import Path
-from torch.utils.tensorboard import SummaryWriter
+
+from src.model import SEKALLM
 
 from benchmarks.counterfact.preprocess import load_dataset
 from benchmarks.counterfact.evaluate import (
@@ -22,17 +23,51 @@ logger = logging.getLogger(__name__)
 def main(args: argparse.Namespace):
     """Run the CounterFact benchmark."""
     datasets.disable_caching()
+    logger.info(args)
     
-    # Initialize the model and tokenizer 
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model, 
-        torch_dtype="auto",
-        device_map="auto"
-    )
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        args.model,
-        padding_side="left"
-    )
+    # Initialize the model and tokenizer
+    if args.seka:
+        if "_tanh" in args.pos:
+            feature_fn = "tanh"
+        elif "_elu" in args.pos:
+            feature_fn = "elu"
+        elif "_squared" in args.pos:
+            feature_fn = "squared-exponential"
+        else:
+            feature_fn = None
+
+        model = SEKALLM(
+            args.model,
+            pos_pt=args.pos,
+            neg_pt=args.neg,
+            marker_start=args.marker_start,
+            marker_end=args.marker_end,
+            layers=args.layers,
+            amplify_pos=args.amplify_pos,
+            amplify_neg=args.amplify_neg,
+            feature_function=feature_fn,
+            torch_dtype="auto",
+            device="auto"
+        )
+        tokenizer = model.tok
+        
+        if args.marker_end is None:
+            args.marker_end = args.marker_start
+            
+        # Force add_marker flag to be True
+        if not args.add_marker:
+            logger.warning("SEKA LLM requires markers, setting add_marker to True.")
+            args.add_marker = True
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            args.model, 
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            args.model,
+            padding_side="left"
+        )
     
     # Set up the evaluation data
     data_path = os.path.join(args.data_path, "counterfact.jsonl")    
@@ -46,7 +81,6 @@ def main(args: argparse.Namespace):
     
     results_output_dir = Path(args.output_dir)
     results_output_dir.mkdir(exist_ok=True, parents=True)
-    tb_writter = SummaryWriter(log_dir=results_output_dir)
     
     logger.info(f"eval counterfact")
     for benchmark_name in args.benchmarks:
@@ -67,7 +101,11 @@ def main(args: argparse.Namespace):
                 max_length=args.max_length,
                 max_new_tokens=args.max_new_tokens,
                 add_unmediated_fact=args.add_unmediated_fact,
-                chat=args.chat
+                chat=args.chat,
+                seka=args.seka,
+                add_marker=args.add_marker,
+                marker_start=args.marker_start,
+                marker_end=args.marker_end,
             )
         elif benchmark_name == "paraphrase":
             results = counterfact_paraphrase(
@@ -78,7 +116,11 @@ def main(args: argparse.Namespace):
                 max_length=args.max_length,
                 max_new_tokens=args.max_new_tokens,
                 add_unmediated_fact=args.add_unmediated_fact,
-                chat=args.chat
+                chat=args.chat,
+                seka=args.seka,
+                add_marker=args.add_marker,
+                marker_start=args.marker_start,
+                marker_end=args.marker_end,
             )
         elif benchmark_name == "generation":
             snippets_file = os.path.join(args.data_path, "attribute_snippets.json")
@@ -94,7 +136,11 @@ def main(args: argparse.Namespace):
                 add_unmediated_fact=args.add_unmediated_fact,
                 attribute_snippets=load_attribute_snippets(snippets_file),
                 tfidf_vectorizer=load_counterfact_tfidf_vectorizer(idf_file, vocab_file),
-                chat=args.chat
+                chat=args.chat,
+                seka=args.seka,
+                add_marker=args.add_marker,
+                marker_start=args.marker_start,
+                marker_end=args.marker_end,
             )
         else:
             raise ValueError(f"unknown benchmark: {benchmark_name}")
@@ -103,15 +149,13 @@ def main(args: argparse.Namespace):
             f"{benchmark_name} benchmark complete! results:\n%s",
             json.dumps(results.metrics.to_dict(), indent=1),
         )
-        for key, value in results.metrics.to_dict().items():
-            tb_writter.add_scalar(f"{benchmark_name}/{key}", value['mean'], 1)
         
         with results_file.open("w") as f:
-            json.dump(results.to_dict(), f)
+            json.dump(results.to_dict(), f, indent=4)
 
         metrics_file = results_output_dir / f"{benchmark_name}_metrics.json"
         with metrics_file.open("w") as f:
-            json.dump(results.metrics.to_dict(), f)
+            json.dump(results.metrics.to_dict(), f, indent=4)
     
 if __name__ == "__main__":
     setup_logger()
@@ -166,7 +210,22 @@ if __name__ == "__main__":
     parser.add_argument("--max_length", type=int, default=None, help="Max sequence length.")
     parser.add_argument("--max_new_tokens", type=int, default=None, help="Max generation length.")
     parser.add_argument("--add_unmediated_fact", type=bool, default=True, help="Present models both facts.")
-    parser.add_argument("--chat", action="store_true", default=False, help="apply chat template")
+    parser.add_argument("--chat", action="store_true", default=False, help="Apply chat template")
+    parser.add_argument("--add_marker", action="store_true", default=False, help="Apply marked prompting")
 
+    parser.add_argument("--seka", action="store_true", default=False, help="Use SEKA model")
+    parser.add_argument('--pos', type=str, default=None,
+                    help='positive (relevant) projector .pt')
+    parser.add_argument('--neg', type=str, default=None,
+                help='optional negative (irrelevant) projector .pt')
+    parser.add_argument('--amplify-pos', default=1.5, type=float)
+    parser.add_argument('--amplify-neg', default=0.5, type=float)
+    parser.add_argument('--layers', default='last10',
+                help="'all' / 'last4' / '0,4,19' …")
+    parser.add_argument('--marker-start', default='**',
+                help='highlight start marker (e.g. 👉 )')
+    parser.add_argument('--marker-end', default=None,
+                help='highlight end marker; defaults to same as start')
+    
     args = parser.parse_args()
     main(args)
