@@ -184,6 +184,8 @@ class SEKALLM:
                 Pn = None if Pn is None else Pn.to(dev)
 
                 if Pp.sum() == 0:
+                    # print("[Key-Steering] No projection applied")
+                    # print(Pp)
                     return k_in
 
                 B, T, H, D = k_in.shape

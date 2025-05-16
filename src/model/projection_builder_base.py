@@ -68,7 +68,7 @@ class ProjectionBuilderBase(abc.ABC):
             for ctx, rel_q, ans, irr_q in self.get_triplets(ex):
                 # assemble texts
                 if self.chat:
-                    text_H = self.tokenizer.apply_chat_template([{"role":"user","content":ctx}], tokenize=False)
+                    text_H = self.tokenizer.apply_chat_template([{"role":"user","content":f"Context: {ctx}"}], tokenize=False)
                     text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
                     text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
                 else:
@@ -78,6 +78,9 @@ class ProjectionBuilderBase(abc.ABC):
                 idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
                 idx_Hp = self.span_token_indices(self.tokenizer, text_Hp, ans)
                 idx_Hn = self.span_token_indices(self.tokenizer, text_Hn, ans)
+
+                assert len(idx_H) == len(idx_Hp) == len(idx_Hn), f"Indices mismatch: {len(idx_H)}, {len(idx_Hp)}, {len(idx_Hn)}"
+
                 if not (idx_H and idx_Hp and idx_Hn):
                     continue
 
