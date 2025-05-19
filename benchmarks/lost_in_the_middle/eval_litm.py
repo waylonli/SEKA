@@ -28,30 +28,35 @@ def best_subspan_em(prediction: str, ground_truths: List[str]) -> float:
     return 0.0
 
 # ────────── prompt builders ──────────────────────────────────────────
-def chat_prompt(ex, prefix):
-    ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
-    prefix_str = "**Pay more attention to the context in the middle.** " if prefix else ""
+def chat_prompt(ex, hlt_full):
+    if not hlt_full:
+        ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
+              "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+              "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
+    else:
+        ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
     user = (
-        f"{prefix_str}Directly answer in one short phrase without any other word.\n\n"
+        f"Directly answer in one short phrase without any other word.\n\n"
         f"Context:\n{ctx}\n\nQuestion: {ex['question']}"
     )
     return [{"role": "user", "content": user}]
 
-def base_prompt(ex, prefix):
-    # ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
-    #       "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
-    #       "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
-    ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
-    prefix_str = "**Pay more attention to the context in the middle.** " if prefix else ""
+def base_prompt(ex, hlt_full):
+    if not hlt_full:
+        ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
+              "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+              "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
+    else:
+        ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
     return (
-        f"{prefix_str}Directly answer in one short phrase without any other word.\n\n"
+        f"Directly answer in one short phrase without any other word.\n\n"
         f"Context:\n{ctx}\n\nQuestion: {ex['question']}\n\nAnswer:"
     )
 
 # ────────── main ─────────────────────────────────────────────────────
 @torch.inference_mode()
 def run(model_id, apply_seka, seka_pos, seka_neg, seka_amplify_pos, seka_amplify_neg, seka_layers, device, data_dir, chat,
-        max_new_tokens, max_samples, batch_size, exp_name, prefix):
+        max_new_tokens, max_samples, batch_size, exp_name, hlt_full):
     tok = AutoTokenizer.from_pretrained(model_id)
 
     if not apply_seka:
@@ -97,9 +102,9 @@ def run(model_id, apply_seka, seka_pos, seka_neg, seka_amplify_pos, seka_amplify
                                   desc=f"gold@{gold_pos}"):
                     chunk = examples[start:start + batch_size]
 
-                    prompts = ([tok.apply_chat_template(chat_prompt(e, prefix), tokenize=False, enable_thinking=False)
+                    prompts = ([tok.apply_chat_template(chat_prompt(e, hlt_full), tokenize=False, enable_thinking=False)
                                 for e in chunk] if chat
-                               else [base_prompt(e, prefix) for e in chunk])
+                               else [base_prompt(e, hlt_full) for e in chunk])
 
                     # enc = tok(prompts, return_tensors="pt",
                     #           padding=True, truncation=True).to(device)
@@ -168,7 +173,7 @@ if __name__ == "__main__":
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--exp-name", default="default",
                    help="sub‑folder name for results/preds")
-    p.add_argument("--prefix", action="store_true")
+    p.add_argument("--hlt-full", action="store_true")
     args = p.parse_args()
     run(**vars(args))
 

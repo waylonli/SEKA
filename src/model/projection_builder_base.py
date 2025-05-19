@@ -216,7 +216,7 @@ class ProjectionBuilderBase(abc.ABC):
             if "qwen3" in model.model.layers[L].__class__.__name__.lower():
                 if hasattr(attn, 'k_norm'):
                     n_kv = model.config.num_key_value_heads
-                    dim_h = model.config.hidden_size // model.config.num_attention_heads
+                    dim_h = model.config.head_dim
                     # reshape into (seq_len, heads, head_dim)
                     k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
                     k = attn.k_norm(k).view(-1, n_kv, dim_h)
