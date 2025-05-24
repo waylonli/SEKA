@@ -211,20 +211,20 @@ if __name__ == "__main__":
     parser.add_argument("--add_unmediated_fact", type=bool, default=True, help="Present models both facts.")
     parser.add_argument("--chat", action="store_true", default=False, help="Apply chat template")
     parser.add_argument("--add_marker", action="store_true", default=False, help="Apply marked prompting")
+    parser.add_argument('--marker_start', default='**',
+                help='highlight start marker (e.g. 👉 )')
+    parser.add_argument('--marker_end', default=None,
+                help='highlight end marker; defaults to same as start')
 
     parser.add_argument("--seka", action="store_true", default=False, help="Use SEKA model")
     parser.add_argument('--pos', type=str, default=None,
                     help='positive (relevant) projector .pt')
     parser.add_argument('--neg', type=str, default=None,
                 help='optional negative (irrelevant) projector .pt')
-    parser.add_argument('--amplify-pos', default=1.5, type=float)
-    parser.add_argument('--amplify-neg', default=0.5, type=float)
+    parser.add_argument('--amplify_pos', default=1.5, type=float)
+    parser.add_argument('--amplify_neg', default=0.5, type=float)
     parser.add_argument('--layers', default='last10',
                 help="'all' / 'last4' / '0,4,19' …")
-    parser.add_argument('--marker-start', default='**',
-                help='highlight start marker (e.g. 👉 )')
-    parser.add_argument('--marker-end', default=None,
-                help='highlight end marker; defaults to same as start')
-    
+
     args = parser.parse_args()
     main(args)

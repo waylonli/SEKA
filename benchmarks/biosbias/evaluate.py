@@ -9,8 +9,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from benchmarks.biasbios.preprocess import _load_bias_in_bios
-from benchmarks.biasbios.evaluator import InstructionEvaluator
+from benchmarks.biosbias.preprocess import _load_bias_in_bios
+from benchmarks.biosbias.evaluator import InstructionEvaluator
 from benchmarks.utils.pasta_utils import (
     Metric,
     get_column_names,
@@ -19,6 +19,9 @@ from benchmarks.utils.pasta_utils import (
     first_token_ids_from_batch
 )
 from benchmarks.utils.typing_uils import Dataset
+
+from src.model import SEKALLM
+from src.utils import encode_with_markers
 
 from typing import cast
 
@@ -106,11 +109,10 @@ class BiosBiasInstructionEvaluationResults(DataClassJsonMixin):
 
 def load_biosbias_tfidf_vectorizer(data_path: str) -> TfidfVectorizer:
     """Load the tfidf vectorizer for Bias in Bios."""
-    if dataset is None:
-        logger.info("loading full biosbias dataset for tfidf vectorizer")
-        dataset = cast(
-            datasets.arrow_dataset.Dataset, _load_bias_in_bios(data_path, split="train")
-        )
+    logger.info("loading full biosbias dataset for tfidf vectorizer")
+    dataset = cast(
+        datasets.arrow_dataset.Dataset, _load_bias_in_bios(data_path, split="train")
+    )
 
     texts = [x["source"]["bio"] for x in dataset]
     logger.info(f"create biosbias tfidf vectorizer from {len(texts)} bios")
@@ -122,7 +124,7 @@ def load_biosbias_tfidf_vectorizer(data_path: str) -> TfidfVectorizer:
 
 @torch.inference_mode()
 def biasbios_prediction_evaluation(
-    model: PreTrainedModel,
+    model: PreTrainedModel | SEKALLM,
     tokenizer: PreTrainedTokenizer,
     dataset: Dataset,
     data_path: str,
@@ -132,7 +134,11 @@ def biasbios_prediction_evaluation(
     max_length: int | None = None,
     max_new_tokens: int | None = None,
     desc: str | None = None,
-    add_marker: str | None = None, 
+    add_marker: bool = False,
+    marker_start: str | None = None,
+    marker_end: str | None = None,
+    chat: bool = False,
+    seka: bool = False,
 ) -> BiasBiosEvaluationResults:
     """Run BiasBios prediction benchmark.
 
@@ -164,8 +170,7 @@ def biasbios_prediction_evaluation(
     if desc is None:
         desc = "BiasBios Evaluation"
 
-    if tfidf_vectorizer is None:
-        tfidf_vectorizer = load_biosbias_tfidf_vectorizer(data_path)
+    tfidf_vectorizer = load_biosbias_tfidf_vectorizer(data_path)
     if references is None:
         references = defaultdict(list)
         for sample in dataset:
@@ -194,25 +199,58 @@ def biasbios_prediction_evaluation(
             targets = batch["target_mediated"]
             targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
 
-            if add_marker is not None:
+            if add_marker:
                 batch['prompt'] = [
-                    prompt.replace(attr, add_marker+attr+add_marker) for prompt,attr in zip(batch['prompt'], batch['attribute'])
+                    prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
                 ]
                 prompts = batch['prompt']
+                
+            if chat:
+                prompts = [tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                ) for prompt in prompts]
 
-            inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
+            if seka:
+                input_ids, steer_mask, attention_mask = encode_with_markers(
+                    prompts, tokenizer, 
+                    marker_start, marker_end)
+                input_ids = input_ids.to(model.device)
+                steer_mask = steer_mask.to(model.device)
+                attention_mask = attention_mask.to(model.device)
+                outputs = model.generate(
+                    ids=input_ids,
+                    steer=True,
+                    steer_mask=steer_mask,
+                    attention_mask=attention_mask,
+                    return_raw=True,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
+            else:
+                inputs = tokenizer(prompts, return_tensors="pt", 
+                                truncation=True, padding=True).to(model.device)
+                outputs = model.generate(**inputs, 
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, inputs.input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
 
-            outputs = model.generate(**inputs, 
-                return_dict_in_generate=True,
-                output_scores=True,
-                max_length=max_length,
-                max_new_tokens=max_new_tokens,
-            )
-
-            generations = tokenizer.batch_decode(
-                outputs.sequences[:, inputs.input_ids.shape[1] :],
-                skip_special_tokens=True,
-            )
             distributions = torch.log_softmax(outputs.scores[0], dim=-1)
 
             for sid, prompt, distribution, generation, target, target_idx in zip(

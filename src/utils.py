@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModel
 def encode_with_markers(text: Union[str, List[str]],
                         tokenizer: AutoTokenizer,
                         m_start: str = '**',
-                        m_end: str = '**') -> tuple[torch.Tensor, torch.Tensor]:
+                        m_end: str = '**') -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Accept either a single string or a list of strings and return
     `(ids[B, S], steer_mask[B, S], attention_mask[B, S])`

@@ -67,10 +67,10 @@ def _get_attribute(
 
 def _reformat_bias_in_bios_file(
     pkl_file: Path,
-    json_file: str,
     bio_min_words: int = 10,
     sent_min_words: int = 3,
     limit: int | None = 50000,
+    file_name: str = "biosbias.json",
     sents_choice: int | str = 1, 
     attr_sent_idx: int | None = None, 
 ) -> Path:
@@ -85,7 +85,7 @@ def _reformat_bias_in_bios_file(
     bb_names = [sample["name"][0] for sample in data]
 
     # Take only one sentence of each bio to make the task harder.
-    
+    nlp = spacy.load("en_core_web_sm")
     bb_bios_raw = [sample["raw"] for sample in data]
 
     bb_bios_abridged = []
@@ -180,9 +180,11 @@ def _reformat_bias_in_bios_file(
         lines.append(line)
 
     # Save in jsonl format.
-    with open(json_file, "w") as f:
+    json_file = Path(file_name)
+    with json_file.open("w") as handle:
         for line in lines:
-            json.dump(dict(line), f)
+            json.dump(dict(line), handle)
+    return json_file
 
 
 def main(args: argparse.Namespace) -> None:
