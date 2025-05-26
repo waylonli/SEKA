@@ -9,6 +9,7 @@ from src.utils import phi, _parse_layers
 import numpy as np
 import matplotlib.pyplot as plt
 import warnings
+import matplotlib as mpl
 warnings.filterwarnings("ignore")
 
 torch.set_grad_enabled(False)
@@ -109,6 +110,7 @@ class ProjectionBuilderBase(abc.ABC):
         applied, skipped = [], []
         all_pos_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
         all_neg_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
+        norm_diffs = np.zeros((num_layers, n_kv))
 
         for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
@@ -136,6 +138,9 @@ class ProjectionBuilderBase(abc.ABC):
                 kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
+
+                norm_value = torch.norm(Hp_mat - Hn_mat).item()
+                norm_diffs[L, h] = norm_value
 
                 # decide
                 if torch.norm(Hp_mat - Hn_mat) / len(Hp_mat) < self.min_diff:
@@ -189,8 +194,11 @@ class ProjectionBuilderBase(abc.ABC):
         all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
                         range(num_layers)}
 
-        # Visualize using T-SNE
+        # Visualize using PCA
         # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+
+        # visualise the head norm differences
+        self.plot_norm_heatmap(norm_diffs, self.layers, output_dir)
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -238,7 +246,6 @@ class ProjectionBuilderBase(abc.ABC):
 
 
     def visualize_key_shift(self, pos_keys, neg_keys, output_dir):
-        import matplotlib as mpl
         mpl.rcParams['font.family'] = 'serif'
         mpl.rcParams['font.serif'] = ['Times New Roman']
         num_layers = len(self.layers)
@@ -295,3 +302,32 @@ class ProjectionBuilderBase(abc.ABC):
                 plt.close()
 
 
+    def plot_norm_heatmap(self, norm_diffs, layers, output_dir):
+        from matplotlib.colors import LinearSegmentedColormap
+        mpl.rcParams['font.family'] = 'serif'
+        mpl.rcParams['font.serif'] = ['Times New Roman']
+        # norm_diffs: shape (num_layers, n_kv). Transpose for heads as rows, layers as columns.
+        data = norm_diffs.T  # Now shape is (n_kv, num_layers): y=heads, x=layers
+
+        # Create custom green-red colormap
+        cmap = LinearSegmentedColormap.from_list(
+            "custom_green_red", ["#FF6B6B", "#fffbe0", "#006400"], N=256
+        )
+
+        plt.figure(figsize=(data.shape[1] * 1.3 + 2, data.shape[0] * 0.7 + 2))
+        im = plt.imshow(data, cmap=cmap, aspect='auto', origin='upper')
+
+        plt.xlabel("Layer", fontsize=34)
+        plt.ylabel("Head", fontsize=34)
+        plt.title(self.model_path.split('/')[-1], fontsize=40, pad=14)
+        plt.xticks(np.arange(data.shape[1]), [str(l) for l in layers], fontsize=30)
+        plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0]), fontsize=30)
+
+        cbar = plt.colorbar(im, fraction=0.025, pad=0.02, aspect=30)
+        cbar.set_label('Norm Value', fontsize=30)
+        cbar.ax.tick_params(labelsize=30)
+
+        plt.tight_layout(pad=2)
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, f"hp_hn_norm_heatmap_{self.model_path.split('/')[-1]}.pdf"))
+        plt.close()
