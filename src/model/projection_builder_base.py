@@ -55,7 +55,6 @@ class ProjectionBuilderBase(abc.ABC):
         ...
 
     def run(self, output_dir):
-        # TODO negative projection is problematic, should be applied to the same token as we are taken the least cross covariance!
         # 1) buffers per layer, per head
         num_layers = len(self.layers)
         n_kv       = self.model.config.num_key_value_heads
@@ -139,19 +138,19 @@ class ProjectionBuilderBase(abc.ABC):
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
-                norm_value = torch.norm(Hp_mat - Hn_mat).item()
+                norm_value = (torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)).item()
                 norm_diffs[L, h] = norm_value
 
                 # decide
-                if torch.norm(Hp_mat - Hn_mat) / len(Hp_mat) < self.min_diff:
+                if norm_value < self.min_diff:
                     # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
                     # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
-                    skipped.append((self.layers[L], h, torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)))
+                    skipped.append((self.layers[L], h, norm_value))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
                     Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
 
                 else:
-                    applied.append((self.layers[L], h, torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)))
+                    applied.append((self.layers[L], h, norm_value))
 
                 Pp_heads.append(Pp)
                 Pn_heads.append(Pn)
@@ -198,7 +197,7 @@ class ProjectionBuilderBase(abc.ABC):
         # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
         # visualise the head norm differences
-        self.plot_norm_heatmap(norm_diffs, self.layers, output_dir)
+        # self.plot_norm_heatmap(norm_diffs, self.model_path, self.layers, output_dir)
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -301,8 +300,8 @@ class ProjectionBuilderBase(abc.ABC):
                 plt.savefig(os.path.join(layer_dir, f"Layer_{L}_Head_{h}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
 
-
-    def plot_norm_heatmap(self, norm_diffs, layers, output_dir):
+    @staticmethod
+    def plot_norm_heatmap(norm_diffs, model_path, layers, output_dir):
         from matplotlib.colors import LinearSegmentedColormap
         mpl.rcParams['font.family'] = 'serif'
         mpl.rcParams['font.serif'] = ['Times New Roman']
@@ -314,20 +313,23 @@ class ProjectionBuilderBase(abc.ABC):
             "custom_green_red", ["#FF6B6B", "#fffbe0", "#006400"], N=256
         )
 
-        plt.figure(figsize=(data.shape[1] * 1.3 + 2, data.shape[0] * 0.7 + 2))
+        plt.figure(figsize=(24, 6))
         im = plt.imshow(data, cmap=cmap, aspect='auto', origin='upper')
 
-        plt.xlabel("Layer", fontsize=34)
-        plt.ylabel("Head", fontsize=34)
-        plt.title(self.model_path.split('/')[-1], fontsize=40, pad=14)
-        plt.xticks(np.arange(data.shape[1]), [str(l) for l in layers], fontsize=30)
-        plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0]), fontsize=30)
+        plt.xlabel("Layer", fontsize=44)
+        plt.ylabel("Head", fontsize=44)
+        model_name = model_path.split('/')[-1] if ("chat" in model_path.split('/')[-1].lower() or "base" in model_path.split('/')[-1].lower()) else f"{model_path.split('/')[-1]}-Base"
+        torch.save(norm_diffs, os.path.join(output_dir, f"norm_diffs_{model_name}.pt"))
+        plt.title(model_name, fontsize=50, pad=14)
+        plt.xticks(np.arange(data.shape[1]), [str(int(l)+1) for l in layers], fontsize=32)
+        plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0])+1, fontsize=32)
 
-        cbar = plt.colorbar(im, fraction=0.025, pad=0.02, aspect=30)
-        cbar.set_label('Norm Value', fontsize=30)
-        cbar.ax.tick_params(labelsize=30)
+        cbar = plt.colorbar(im, fraction=0.025, pad=0.02, aspect=40)
+        cbar.set_label('Norm Value', fontsize=40)
+        cbar.ax.tick_params(labelsize=40)
 
         plt.tight_layout(pad=2)
         os.makedirs(output_dir, exist_ok=True)
-        plt.savefig(os.path.join(output_dir, f"hp_hn_norm_heatmap_{self.model_path.split('/')[-1]}.pdf"))
+        plt.savefig(os.path.join(output_dir, f"hp_hn_norm_heatmap_{model_path.split('/')[-1]}.pdf"))
         plt.close()
+
