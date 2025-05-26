@@ -26,7 +26,6 @@ from benchmarks.utils.pasta_utils import (
 )
 
 from src.model import SEKALLM
-from src.utils import encode_with_markers
 
 logger = logging.getLogger(__name__)
 
