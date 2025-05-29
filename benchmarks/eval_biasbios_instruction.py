@@ -6,8 +6,8 @@ import datasets
 import transformers
 from torch.utils.tensorboard import SummaryWriter
 
-from benchmarks.biosbias.preprocess import load_dataset
-from benchmarks.biosbias.evaluate import biasbios_instruction_evaluation, BiosBiasInstructionEvaluationResults
+from benchmarks.biasbios.preprocess import load_dataset
+from benchmarks.biasbios.evaluate import biasbios_instruction_evaluation, BiosBiasInstructionEvaluationResults
 
 logger = logging.getLogger(__name__)
 

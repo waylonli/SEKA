@@ -45,6 +45,7 @@ def _load_bias_in_bios(file: str, **kwargs: Any) -> Dataset:
         )
 
     dataset = datasets.load_dataset("json", data_files=str(file), **kwargs)
+
     assert isinstance(
         dataset, datasets.arrow_dataset.Dataset | datasets.dataset_dict.DatasetDict
     ), type(dataset)

@@ -9,8 +9,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
-from benchmarks.biosbias.preprocess import _load_bias_in_bios
-from benchmarks.biosbias.evaluator import InstructionEvaluator
+from benchmarks.biasbios.preprocess import _load_bias_in_bios
+from benchmarks.biasbios.evaluator import InstructionEvaluator
 from benchmarks.utils.pasta_utils import (
     Metric,
     get_column_names,
@@ -107,15 +107,15 @@ class BiosBiasInstructionEvaluationResults(DataClassJsonMixin):
     metrics: InstructionEvaluationMetrics 
     attentions: dict 
 
-def load_biosbias_tfidf_vectorizer(data_path: str) -> TfidfVectorizer:
+def load_biasbios_tfidf_vectorizer(data_path: str) -> TfidfVectorizer:
     """Load the tfidf vectorizer for Bias in Bios."""
-    logger.info("loading full biosbias dataset for tfidf vectorizer")
+    logger.info("loading full biasbios dataset for tfidf vectorizer")
     dataset = cast(
         datasets.arrow_dataset.Dataset, _load_bias_in_bios(data_path, split="train")
     )
 
     texts = [x["source"]["bio"] for x in dataset]
-    logger.info(f"create biosbias tfidf vectorizer from {len(texts)} bios")
+    logger.info(f"create biasbios tfidf vectorizer from {len(texts)} bios")
 
     tfidf_vectorizer = TfidfVectorizer()
     tfidf_vectorizer.fit(texts)
@@ -140,45 +140,39 @@ def biasbios_prediction_evaluation(
     chat: bool = False,
     seka: bool = False,
 ) -> BiasBiosEvaluationResults:
-    """Run BiasBios prediction benchmark.
+    """Run BiasBios prediction benchmark (case-insensitive evaluation)."""
 
-    This benchmark involves measuring accuracy on the BiasBios prediction task. 
-
-    Args:
-        mt: The model to evaluate. 
-        dataset: The dataset to evaluate on.
-        references: Mapping from label to reference texts for that label. By default,
-            full bios for each label will be used.
-        batch_size: Batch size for model.
-        top_k: Compute top-k labels predicted by model.
-        prompt_key: Which column in dataset to use as prompt.
-        max_length: Max sequence length (input+output).
-        max_new_tokens: Max number of new tokens to generate. Cannot be used with
-            `max_length`, see huggingface docs.
-        device: Send model and data to this device.
-        desc: TQDM description. 
-        add_few_shot: Whether to apply few-shot prompting. 
-        few_shot_index: Sample index for few shots. 
-        add_marker: Whether to apply marked prompting. 
-
-    Returns:
-        Benchmark results.
-
-    """
     if max_length is None and max_new_tokens is None:
         max_length = DEFAULT_MAX_LENGTH_ERROR_CORRECTION
     if desc is None:
         desc = "BiasBios Evaluation"
 
-    tfidf_vectorizer = load_biosbias_tfidf_vectorizer(data_path)
+    tfidf_vectorizer = load_biasbios_tfidf_vectorizer(data_path)
     if references is None:
         references = defaultdict(list)
         for sample in dataset:
             references[sample["target_mediated"]].append(sample["source"]["bio"])
 
-    labels = sorted({x["target_mediated"] for x in dataset})
+    # Canonical labels (lowercase)
+    labels = sorted({x["target_mediated"].lower() for x in dataset})
     label_add_space = False
-    labels_token_idx = first_token_ids_from_batch(tokenizer, labels, add_space=label_add_space)
+
+    def all_case_variants(label):
+        # Extend as needed
+        return [label, label.capitalize(), label.upper()]
+
+    # Map canonical label -> all token ids for its case variants
+    label_to_token_ids = {}
+    for label in labels:
+        variants = all_case_variants(label)
+        token_ids = []
+        for v in variants:
+            try:
+                ids = first_token_ids_from_batch(tokenizer, [v], add_space=label_add_space)
+                token_ids.append(ids[0])
+            except Exception:
+                continue
+        label_to_token_ids[label] = token_ids
 
     reference_tfidfs = {
         key: tfidf_vectorizer.transform(texts).mean(axis=0).A
@@ -196,15 +190,15 @@ def biasbios_prediction_evaluation(
         for batch in tqdm(loader, desc=desc):
             ids = batch["id"]
             prompts = batch["prompt"]
-            targets = batch["target_mediated"]
-            targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
+            targets = [t.lower() for t in batch["target_mediated"]]
+            targets_idx = [label_to_token_ids[t][0] for t in targets]  # Use first variant for target
 
             if add_marker:
                 batch['prompt'] = [
                     prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
                 ]
                 prompts = batch['prompt']
-                
+
             if chat:
                 prompts = [tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
@@ -214,7 +208,7 @@ def biasbios_prediction_evaluation(
 
             if seka:
                 input_ids, steer_mask, attention_mask = encode_with_markers(
-                    prompts, tokenizer, 
+                    prompts, tokenizer,
                     marker_start, marker_end)
                 input_ids = input_ids.to(model.device)
                 steer_mask = steer_mask.to(model.device)
@@ -237,9 +231,9 @@ def biasbios_prediction_evaluation(
                     skip_special_tokens=True,
                 )
             else:
-                inputs = tokenizer(prompts, return_tensors="pt", 
+                inputs = tokenizer(prompts, return_tensors="pt",
                                 truncation=True, padding=True).to(model.device)
-                outputs = model.generate(**inputs, 
+                outputs = model.generate(**inputs,
                     return_dict_in_generate=True,
                     output_scores=True,
                     max_length=max_length,
@@ -256,14 +250,19 @@ def biasbios_prediction_evaluation(
             for sid, prompt, distribution, generation, target, target_idx in zip(
                 ids, prompts, distributions, generations, targets, targets_idx
             ):
-                label_log_probs = distribution[labels_token_idx]
+                # Aggregate log-probs across all case variants for each label
+                agg_label_log_probs = []
+                for label in labels:
+                    idxs = label_to_token_ids[label]
+                    logps = [distribution[idx] for idx in idxs if idx is not None]
+                    agg_label_log_probs.append(torch.stack(logps).max() if logps else torch.tensor(float('-inf')))
+                agg_label_log_probs = torch.stack(agg_label_log_probs)
 
-                logp_predictions, predictions_idx = label_log_probs.topk(
-                    k=top_k, dim=-1
-                )
+                logp_predictions, predictions_idx = agg_label_log_probs.topk(k=top_k, dim=-1)
                 predictions = [labels[idx] for idx in predictions_idx]
 
-                logp_target = distribution[target_idx]
+                # For the target, take the max over case variants as well
+                logp_target = agg_label_log_probs[labels.index(target)]
 
                 fluency_score = weighted_n_gram_entropy(generation)
 
@@ -273,6 +272,7 @@ def biasbios_prediction_evaluation(
                     generation_tfidf.squeeze(), reference_tfidf.squeeze()
                 )
 
+                import pdb; pdb.set_trace()
                 sample = BiasBiosEvaluationSample(
                     id=sid,
                     prompt=prompt,
@@ -308,6 +308,7 @@ def biasbios_prediction_evaluation(
         samples=samples,
         metrics=error_correction_metrics,
     )
+
 
 
 @torch.inference_mode()
@@ -359,7 +360,7 @@ def biasbios_instruction_evaluation(
         desc = "Instruction Evaluation"
 
     if tfidf_vectorizer is None:
-        tfidf_vectorizer = load_biosbias_tfidf_vectorizer(data_path)
+        tfidf_vectorizer = load_biasbios_tfidf_vectorizer(data_path)
     if references is None:
         references = defaultdict(list)
         for sample in dataset:

@@ -174,18 +174,18 @@ class ProjectionBuilderBase(abc.ABC):
                 output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
 
         # summary
-        print("\nProjection Summary:")
-        if applied:
-            print(f" ✔ Applied projection: {len(applied)}")
-            for L, h, diff in applied:
-                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
-        if skipped:
-            print(f" ✖ Skipped (identity): {len(skipped)}")
-            for L, h, diff in skipped:
-                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+        # print("\nProjection Summary:")
+        # if applied:
+        #     print(f" ✔ Applied projection: {len(applied)}")
+        #     for L, h, diff in applied:
+        #         print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+        # if skipped:
+        #     print(f" ✖ Skipped (identity): {len(skipped)}")
+        #     for L, h, diff in skipped:
+        #         print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
-        print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
-        print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
+        # print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
+        # print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
         # Convert to numpy arrays
         all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in

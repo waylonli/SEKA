@@ -128,6 +128,7 @@ def prompt_in_context_from_sample(
         context += " "
 
     prompt_in_context = f"{context}{prompt}"
+
     return prompt_in_context
 
 def _validate_same_length(**kwargs: Sequence | ArrayLike) -> None:

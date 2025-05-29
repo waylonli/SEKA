@@ -6,8 +6,8 @@ import datasets
 import transformers
 from pathlib import Path
 
-from benchmarks.biosbias.preprocess import load_dataset
-from benchmarks.biosbias.evaluate import biasbios_prediction_evaluation
+from benchmarks.biasbios.preprocess import load_dataset
+from benchmarks.biasbios.evaluate import biasbios_prediction_evaluation
 from benchmarks.utils.pasta_utils import setup_logger
 
 from src.model import SEKALLM
@@ -152,4 +152,5 @@ if __name__ == "__main__":
                 help="'all' / 'last4' / '0,4,19' …")
     
     args = parser.parse_args()
+
     main(args)

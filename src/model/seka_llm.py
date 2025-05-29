@@ -203,7 +203,39 @@ class SEKALLM:
 
                 return k_out
 
+            def _hook_sep(_, __, k_in,
+                          m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
+                          gp=amplify_pos, gn=amplify_neg):
+                """
+                • Positive steering on tokens where m == True
+                • Negative steering on tokens where m == False
+                """
+                B, T, H, D = k_in.shape
+                if (Pp.sum() == 0  # nothing to project
+                        or m is None or m.shape != (B, T)):  # bad/no mask
+                    return k_in
+
+                k_feat = phi(k_in, feature_function)  # (B, T, H, D)
+
+                # ---- positive tokens ------------------------------------------------
+                if m.sum() > 0:
+                    k_pos = k_feat[m].to(Pp.dtype)  # (N_pos, H, D)
+                    delta_pos = gp * torch.einsum('n h d, h d k -> n h k', k_pos, Pp)
+                    k_feat[m] += delta_pos.to(k_feat.dtype)
+
+                # ---- negative tokens ------------------------------------------------
+                if Pn is not None:
+                    neg_mask = ~m
+                    if neg_mask.sum() > 0:
+                        k_neg = k_feat[neg_mask].to(Pn.dtype)  # (N_neg, H, D)
+                        delta_neg = gn * torch.einsum('n h d, h d k -> n h k', k_neg, Pn)
+                        k_feat[neg_mask] += delta_neg.to(k_feat.dtype)
+
+                k_out = phi_inv(k_feat, feature_function)
+                return k_out
+
             self._hooks.append(mod.register_forward_hook(_hook))
+            # self._hooks.append(mod.register_forward_hook(_hook_sep))
 
         if not silence:
             print(f"✅ Steering hooks attached on layers {sel_layers}")

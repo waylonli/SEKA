@@ -161,7 +161,7 @@ def _reformat_bias_in_bios_file(
             continue
 
         entity = bb_name
-        prompt = f"{entity} has the occupation of"
+        prompt = f"{entity} has the occupation of a "
         context = bb_bio
         # attribute = bb_bio[bb_bio.index(bb_name) + len(bb_name) :].strip(".: ")
         attribute = _get_attribute(bb_bio, bb_name, nlp, sent_idx=attr_sent_idx)
@@ -181,6 +181,8 @@ def _reformat_bias_in_bios_file(
 
     # Save in jsonl format.
     json_file = Path(file_name)
+    # create folder if it does not exist
+    json_file.parent.mkdir(parents=True, exist_ok=True)
     with json_file.open("w") as handle:
         for line in lines:
             json.dump(dict(line), handle)

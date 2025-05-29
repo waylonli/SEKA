@@ -129,10 +129,10 @@ def phi(x: torch.Tensor, name: str | None) -> torch.Tensor:
 def phi_inv(x: torch.Tensor, name: str | None) -> torch.Tensor:
     if name is None:
         return x
-    eps = torch.full_like(x, 1e-4)
+    eps = torch.full_like(x, 1e-4).to(x.device)
     if name == "squared-exponential":
         length_scale = 1
-        eps = torch.ones(x.shape) * 1e-4
+        eps = torch.ones(x.shape).to(x.device) * 1e-4
         return -torch.log(torch.max(x, eps)) * 2 * length_scale ** 2
     if name == "tanh":
         x = torch.clamp(x, -1 + eps, 1 - eps)
