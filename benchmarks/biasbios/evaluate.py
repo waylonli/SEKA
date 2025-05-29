@@ -272,7 +272,7 @@ def biasbios_prediction_evaluation(
                     generation_tfidf.squeeze(), reference_tfidf.squeeze()
                 )
 
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 sample = BiasBiosEvaluationSample(
                     id=sid,
                     prompt=prompt,

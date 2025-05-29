@@ -161,7 +161,7 @@ def _reformat_bias_in_bios_file(
             continue
 
         entity = bb_name
-        prompt = f"{entity} has the occupation of a "
+        prompt = f"{entity} has the occupation of a/an "
         context = bb_bio
         # attribute = bb_bio[bb_bio.index(bb_name) + len(bb_name) :].strip(".: ")
         attribute = _get_attribute(bb_bio, bb_name, nlp, sent_idx=attr_sent_idx)
