@@ -26,6 +26,7 @@ from benchmarks.utils.pasta_utils import (
 )
 
 from src.model import SEKALLM
+from pastalib.pasta import PASTA
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,7 @@ def counterfact_evaluate(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ) -> CounterFactEvaluateRun:
     include_target_probs = "target_mediated" in dataset.column_names
 
@@ -215,6 +217,31 @@ def counterfact_evaluate(
                     max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
                 )
+            elif pasta:
+                inputs, offset_mapping = tokenizer(
+                    prompts, return_tensors="pt", 
+                    return_offsets_mapping=True,
+                    truncation=True, padding=True
+                ).to(model.device)
+                with pasta.apply_steering(
+                    model=model, 
+                    strings=prompts, 
+                    substrings=attributes, 
+                    model_input=inputs, 
+                    offsets_mapping=offset_mapping
+                ) as steered_model: 
+                    outputs = steered_model.generate(**inputs, 
+                        do_sample=False,
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                        temperature=None,
+                        top_k=None,
+                        top_p=None,
+                        max_length=max_length,
+                        max_new_tokens=max_new_tokens,
+                        pad_token_id=tokenizer.eos_token_id,
+                        output_attentions=True,
+                    )
             else:
                 inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
                 outputs = model.generate(**inputs, 
@@ -333,6 +360,7 @@ def counterfact_efficacy(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ):
     if desc is None:
         desc = "efficacy benchmark"
@@ -357,6 +385,7 @@ def counterfact_efficacy(
         marker_end=marker_end,
         chat=chat,
         seka=seka,
+        pasta=pasta
     )
     
     target_score_key = "target_mediated_score"
@@ -428,6 +457,7 @@ def counterfact_paraphrase(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ):
     """Run the CounterFact paraphrase benchmark.
 
@@ -473,6 +503,7 @@ def counterfact_paraphrase(
         marker_end=marker_end,
         chat=chat,
         seka=seka,
+        pasta=pasta,
     )
 
     results_by_sample_id: dict = defaultdict(list)
@@ -602,6 +633,7 @@ def counterfact_generation(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ) -> CounterFactGenerationBenchmarkResults:
     """Run the CounterFact generation benchmark.
 
@@ -654,6 +686,7 @@ def counterfact_generation(
         marker_end=marker_end,
         chat=chat,
         seka=seka,
+        pasta=pasta,
     )
     generations_key = "generations"
     run_results_by_id = _group_results_by_id(run)

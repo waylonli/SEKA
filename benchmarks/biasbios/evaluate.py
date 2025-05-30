@@ -22,6 +22,7 @@ from benchmarks.utils.typing_uils import Dataset
 
 from src.model import SEKALLM
 from src.utils import encode_with_markers
+from pastalib.pasta import PASTA
 
 from typing import cast
 
@@ -139,6 +140,7 @@ def biasbios_prediction_evaluation(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ) -> BiasBiosEvaluationResults:
     """Run BiasBios prediction benchmark (case-insensitive evaluation)."""
 
@@ -228,6 +230,31 @@ def biasbios_prediction_evaluation(
                 )
                 generations = tokenizer.batch_decode(
                     outputs.sequences[:, input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
+            elif pasta:
+                inputs, offset_mapping = tokenizer(
+                    prompts, return_tensors="pt", 
+                    return_offsets_mapping=True,
+                    truncation=True, padding=True
+                ).to(model.device)
+                with pasta.apply_steering(
+                    model=model, 
+                    strings=prompts, 
+                    substrings=batch['attribute'], 
+                    model_input=inputs, 
+                    offsets_mapping=offset_mapping
+                ) as steered_model: 
+                    outputs = steered_model.generate(**inputs, 
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                        max_length=max_length,
+                        max_new_tokens=max_new_tokens,
+                        pad_token_id=tokenizer.eos_token_id,
+                        output_attentions=True,
+                    )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, inputs.input_ids.shape[1] :],
                     skip_special_tokens=True,
                 )
             else:
@@ -330,6 +357,7 @@ def biasbios_instruction_evaluation(
     marker_end: str | None = None,
     chat: bool = False,
     seka: bool = False,
+    pasta: PASTA | None = None,
 ) -> BiosBiasInstructionEvaluationResults:
     """ Evaluate the instruction following tasks  
 

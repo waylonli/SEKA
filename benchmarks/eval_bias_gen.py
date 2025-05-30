@@ -11,6 +11,7 @@ from benchmarks.biasbios.evaluate import biasbios_prediction_evaluation
 from benchmarks.utils.pasta_utils import setup_logger
 
 from src.model import SEKALLM
+from pastalib.pasta import PASTA, read_head_config
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ def main(args: argparse.Namespace):
     datasets.disable_caching()
     
     # Initialize the model and tokenizer 
+    pasta = None
     if args.seka:
         if "_tanh" in args.pos:
             feature_fn = "tanh"
@@ -55,6 +57,15 @@ def main(args: argparse.Namespace):
             device_map="auto"
         )
         tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
+        if args.pasta:
+            head_config = read_head_config(args.head_config)
+            pasta = PASTA(
+                model, 
+                tokenizer,
+                head_config=head_config, 
+                alpha=args.pasta_alpha, 
+                scale_position=args.scale_position,
+            )
     
     # Set up the evaluation data 
     dataset = load_dataset(args.data_path, args.attribute_no_entity, args.example_subset)
@@ -82,6 +93,7 @@ def main(args: argparse.Namespace):
             marker_start=args.marker_start,
             marker_end=args.marker_end,
             seka=args.seka,
+            pasta=pasta,
         )
         logging.info(
             f"Evaluation complete! results:\n%s",
@@ -150,6 +162,11 @@ if __name__ == "__main__":
     parser.add_argument('--amplify_neg', default=0.5, type=float)
     parser.add_argument('--layers', default='last10',
                 help="'all' / 'last4' / '0,4,19' …")
+    
+    parser.add_argument("--pasta", action="store_true", default=False, help="Use PASTA model")
+    parser.add_argument("--head_config", type=str, default=None, help="PASTA head config for steering")
+    parser.add_argument("--pasta_alpha", type=float, default=None, help="Scaling coefficient")
+    parser.add_argument("--scale_position", type=str, default=None, help="Steer the selected section or others")
     
     args = parser.parse_args()
 
