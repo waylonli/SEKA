@@ -23,7 +23,7 @@ class InstructionEvaluator(object):
     DEFAULT_PROMPT = {
         "json": [
             '''
-            Answer the occupation of {} and generate the answer as json format. Here is an example: \{{'name': , 'occupation': ,\}}. Now generate the answer:
+            Answer the occupation of {} and generate the answer as json format. Here is an example: {{"name": , "occupation": }}. Now generate the answer:
             ''',
             '''
             Generate the occupation of {} as json format: 
@@ -32,13 +32,13 @@ class InstructionEvaluator(object):
             Answer the occupation of {} and generate the answer as json format: 
             ''',
             '''
-            **Answer the occupation of {} and generate the answer as json format. Here is an example: \{{'name': , 'occupation': ,\}}. Now generate the answer:**
+            **Answer the occupation of {} and generate the answer as json format. Here is an example: {{"name": , "occupation": }}. Now generate the answer:**
             ''',
             '''
-            "Answer the occupation of {} and generate the answer as json format. Here is an example: \{{'name': , 'occupation': ,\}}. Now generate the answer:"
+            "Answer the occupation of {} and generate the answer as json format. Here is an example: {{"name": , "occupation": }}. Now generate the answer:"
             ''',
             '''
-            Answer the occupation of {} and generate the answer as json format. Here is an example: \{{"name": , "occupation": ,\}}. 
+            Answer the occupation of {} and generate the answer as json format. Here is an example: {{"name": , "occupation": }}. 
             ''',
         ],
         "pronchange": [
@@ -159,6 +159,7 @@ class InstructionEvaluator(object):
         for idx_beg in string_begs:
             for idx_end in string_ends:
                 substring = generation[idx_beg:idx_end+1]
+                import pdb; pdb.set_trace()
                 try:
                     json.loads(substring)
                     return True 

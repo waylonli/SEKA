@@ -402,6 +402,8 @@ def biasbios_instruction_evaluation(
             )
             targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
 
+            inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
+
             if add_marker:
                 batch['prompt'] = [
                     prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
@@ -491,6 +493,8 @@ def biasbios_instruction_evaluation(
                     instruction_evaluation=instruction_evaluation, 
                     sample_attn_scores=None, 
                 )
+                import pdb;
+                pdb.set_trace()
                 samples.append(sample)
 
     n_correct_top1 = sum(x.predictions[0] == x.target for x in samples)

@@ -79,7 +79,10 @@ def main(args: argparse.Namespace):
             batch_size=args.batch_size,
             max_new_tokens=args.max_new_tokens,
             max_length=args.max_length,
-            desc="Instruction evaluation [LM]",
+            desc="Instruction evaluation [LM]",add_marker=args.add_marker,
+            marker_start=args.marker_start,
+            marker_end=args.marker_end,
+            seka=args.seka,
         )
         logging.info(
             f"Evaluation complete! results:\n%s",
