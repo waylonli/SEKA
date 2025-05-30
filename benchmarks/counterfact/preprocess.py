@@ -62,14 +62,26 @@ def precompute_token_ids(
     fp32: bool = False,
 ):
     precomputed = {}
+    
+    case_funcs = {
+        "lower": str.lower,
+        "capitalize": str.capitalize,
+        "upper": str.upper,
+    }
+    
     for target_key in ("target_mediated", "target_unmediated"):
         target = sample.get(target_key)
         if target is None or any(t is None for t in target):
             continue
-        precomputed[f"{target_key}.token_id"] = first_token_ids_from_batch(
-            tokenizer, target, target_token_first_space 
-        )
-        
+
+        # Precompute for each casing variant
+        for case_label, func in case_funcs.items():
+            # Apply the casing function in one comprehension
+            cased_target = [func(t) for t in target]
+            precomputed[f"{target_key}.{case_label}.token_id"] = first_token_ids_from_batch(
+                tokenizer, cased_target, target_token_first_space 
+            )
+
     if fp32:
         precomputed = _as_fp32(precomputed)
 

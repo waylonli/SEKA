@@ -135,8 +135,8 @@ def counterfact_evaluate(
     desc: str | None = None,
     return_mediated: bool = True,
     return_unmediated: bool = True,
-    add_unmediated_fact: bool = True,  
-    add_marker: bool = False, 
+    add_unmediated_fact: bool = True,
+    add_marker: bool = False,
     marker_start: str | None = None,
     marker_end: str | None = None,
     chat: bool = False,
@@ -196,6 +196,10 @@ def counterfact_evaluate(
                     add_generation_prompt=True,
                 ) for prompt in prompts]
             
+            # with open("counterfact_prompts.json", 'w') as f:
+            #     json.dump(prompts, f, indent=4)
+            #     assert False
+            
             if seka:
                 outputs = model.generate(
                     ids=prompts,
@@ -241,12 +245,19 @@ def counterfact_evaluate(
                     target_keys.append("mediated")
                 if return_unmediated:
                     target_keys.append("unmediated")
-                batch_indices = torch.arange(current_batch_size)
                 for target_key in target_keys:
-                    target_id = batch[f"target_{target_key}.token_id"]
-                    target_probs = first_token_logps[batch_indices, target_id]
-                    target_prob_key = f"target_{target_key}_score"
-                    batched_results[target_prob_key] = target_probs.tolist()
+                    variant_keys = [
+                        f"target_{target_key}.lower.token_id",
+                        f"target_{target_key}.capitalize.token_id",
+                        f"target_{target_key}.upper.token_id",
+                    ]
+                    # fetch their per‐item log‐probs
+                    variant_ids = torch.stack(
+                        [batch[vk] for vk in variant_keys], dim=1).to(model.device)
+                    target_probs = first_token_logps.gather(dim=1, index=variant_ids) # shape: (3, batch_size)
+                    # take max across the 3 variants, per batch‐item
+                    max_logps, _ = target_probs.max(dim=1)
+                    batched_results[f"target_{target_key}_score"] = max_logps.tolist()
 
             for bi in range(current_batch_size):
                 result: dict = {k: vs[bi] for k, vs in batched_results.items()}
