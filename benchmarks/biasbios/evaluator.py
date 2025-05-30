@@ -108,7 +108,7 @@ class InstructionEvaluator(object):
                 val for val in text_input for i in range(len(self.prompt_temple))
             ]
             new_other_inputs.append(new_text_input)
-        
+        # import pdb; pdb.set_trace()
         return prompts, instructions, new_entities, tuple(new_other_inputs)
     
     def evaluate_sample(self, generation, target=None, **kwargs):

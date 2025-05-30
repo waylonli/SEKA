@@ -21,7 +21,7 @@ def main(args: argparse.Namespace):
         torch_dtype="auto",
         device_map="auto"
     )
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
     
     # Set up the evaluation data 
     logger.info("loading several data sources")
@@ -32,9 +32,9 @@ def main(args: argparse.Namespace):
     )
     
     evaluation_result_dir = args.output_dir
-    os.mkdir(evaluation_result_dir, exist_ok=True, parents=True) 
-    result_file = evaluation_result_dir / f"instruction_evaluation_{args.task}.json"
-    metric_file = evaluation_result_dir / "metric_result.json" 
+    os.makedirs(evaluation_result_dir, exist_ok=True)
+    result_file = os.path.join(evaluation_result_dir, f"instruction_evaluation_{args.task}.json")
+    metric_file = os.path.join(evaluation_result_dir, "metric_result.json")
 
     if not os.path.exists(result_file) or args.overwrite_output_dir:
         logger.info("begin baseline")
@@ -42,6 +42,7 @@ def main(args: argparse.Namespace):
             model=model,
             tokenizer=tokenizer,
             dataset=dataset,
+            data_path=args.data_path,
             task=args.task, 
             prompt_idx=args.prompt_idx, 
             batch_size=args.batch_size,
