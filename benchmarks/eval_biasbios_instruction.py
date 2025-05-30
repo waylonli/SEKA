@@ -54,7 +54,6 @@ def main(args: argparse.Namespace):
         )
         tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
 
-    tokenizer.pad_token = tokenizer.eos_token
     # Set up the evaluation data 
     logger.info("loading several data sources")
     dataset = load_dataset(

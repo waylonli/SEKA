@@ -324,7 +324,12 @@ def biasbios_instruction_evaluation(
     top_k: int = 3,
     max_length: int | None = None,
     max_new_tokens: int | None = None,
-    desc: str | None = None, 
+    desc: str | None = None,
+    add_marker: bool = False,
+    marker_start: str | None = None,
+    marker_end: str | None = None,
+    chat: bool = False,
+    seka: bool = False,
 ) -> BiosBiasInstructionEvaluationResults:
     """ Evaluate the instruction following tasks  
 
@@ -397,21 +402,58 @@ def biasbios_instruction_evaluation(
             )
             targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
 
-            inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
+            if add_marker:
+                batch['prompt'] = [
+                    prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
+                ]
+                prompts = batch['prompt']
 
-            generate_kwargs = dict(
-                return_dict_in_generate=True,
-                output_scores=True,
-                max_length=max_length,
-                max_new_tokens=max_new_tokens,
-            )
+            if chat:
+                prompts = [tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                ) for prompt in prompts]
 
-            outputs = model.generate(**inputs, **generate_kwargs)
+            if seka:
+                input_ids, steer_mask, attention_mask = encode_with_markers(
+                    prompts, tokenizer,
+                    marker_start, marker_end)
+                input_ids = input_ids.to(model.device)
+                steer_mask = steer_mask.to(model.device)
+                attention_mask = attention_mask.to(model.device)
+                outputs = model.generate(
+                    ids=input_ids,
+                    steer=True,
+                    steer_mask=steer_mask,
+                    attention_mask=attention_mask,
+                    return_raw=True,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
+            else:
+                inputs = tokenizer(prompts, return_tensors="pt",
+                                truncation=True, padding=True).to(model.device)
+                outputs = model.generate(**inputs,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    max_length=max_length,
+                    max_new_tokens=max_new_tokens,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, inputs.input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
 
-            generations = tokenizer.batch_decode(
-                outputs.sequences[:, inputs.input_ids.shape[1] :],
-                skip_special_tokens=True,
-            )
             distributions = torch.log_softmax(outputs.scores[0], dim=-1)
 
             for idx, sid, prompt, distribution, generation, target, target_idx in zip(
