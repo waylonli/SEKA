@@ -217,27 +217,27 @@ class ProjectionBuilderBase(abc.ABC):
         hiddens = outputs.hidden_states
         result: list[torch.Tensor] = []
         for L in layers:
-            # h_in = hiddens[L]
-            # attn = model.model.layers[L].self_attn
-
-            # if "qwen3" in model.model.layers[L].__class__.__name__.lower():
-            #     if hasattr(attn, 'k_norm'):
-            #         h_in = model.model.layers[L].input_layernorm(h_in)
-            #         input_shape = h_in.shape[:-1]
-            #         dim_h = model.config.head_dim
-            #         # reshape into (seq_len, heads, head_dim)
-            #         k = attn.k_norm(attn.k_proj(h_in).view(*input_shape, -1, dim_h))[0]
-
-            h_in = hiddens[L][0]
+            h_in = hiddens[L]
             attn = model.model.layers[L].self_attn
 
             if "qwen3" in model.model.layers[L].__class__.__name__.lower():
                 if hasattr(attn, 'k_norm'):
-                    n_kv = model.config.num_key_value_heads
+                    h_in = model.model.layers[L].input_layernorm(h_in)
+                    input_shape = h_in.shape[:-1]
                     dim_h = model.config.head_dim
                     # reshape into (seq_len, heads, head_dim)
-                    k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
-                    k = attn.k_norm(k).view(-1, n_kv, dim_h)
+                    k = attn.k_norm(attn.k_proj(h_in).view(*input_shape, -1, dim_h))[0]
+
+            # h_in = hiddens[L][0]
+            # attn = model.model.layers[L].self_attn
+
+            # if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+            #     if hasattr(attn, 'k_norm'):
+            #         n_kv = model.config.num_key_value_heads
+            #         dim_h = model.config.head_dim
+            #         # reshape into (seq_len, heads, head_dim)
+            #         k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
+            #         k = attn.k_norm(k).view(-1, n_kv, dim_h)
             else:
                 raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}. Currently only Qwen3 models are supported.")
 
