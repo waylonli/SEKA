@@ -9,20 +9,52 @@ import transformers
 from benchmarks.biasbios.preprocess import load_dataset
 from benchmarks.biasbios.evaluate import biasbios_instruction_evaluation, BiosBiasInstructionEvaluationResults
 
+from src.model import SEKALLM
+
 logger = logging.getLogger(__name__)
 
 def main(args: argparse.Namespace):
     """Run the evaluation for instruction following tasks."""
     datasets.disable_caching()
-    
-    # Initialize the model and tokenizer 
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        args.model, 
-        torch_dtype="auto",
-        device_map="auto"
-    )
-    tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
-    
+
+    if args.seka:
+        if "_tanh" in args.pos:
+            feature_fn = "tanh"
+        elif "_elu" in args.pos:
+            feature_fn = "elu"
+        elif "_squared" in args.pos:
+            feature_fn = "squared-exponential"
+        else:
+            feature_fn = None
+
+        model = SEKALLM(
+            args.model,
+            pos_pt=args.pos,
+            neg_pt=args.neg,
+            marker_start=args.marker_start,
+            marker_end=args.marker_end,
+            layers=args.layers,
+            amplify_pos=args.amplify_pos,
+            amplify_neg=args.amplify_neg,
+            feature_function=feature_fn,
+            torch_dtype="auto",
+            device="auto"
+        )
+        tokenizer = model.tok
+
+        # Force add_marker flag to be True
+        if not args.add_marker:
+            logger.warning("SEKA LLM requires markers, setting add_marker to True.")
+            args.add_marker = True
+    else:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
+
+    tokenizer.pad_token = tokenizer.eos_token
     # Set up the evaluation data 
     logger.info("loading several data sources")
     dataset = load_dataset(
@@ -54,18 +86,12 @@ def main(args: argparse.Namespace):
             f"Evaluation complete! results:\n%s",
             json.dumps(evluation_result.metrics.to_dict(), indent=1),
         )
-        # tb_writter = SummaryWriter(log_dir=evaluation_result_dir)
 
-        metrics = evluation_result.metrics.to_dict() 
-        # tb_writter.add_scalar("top1_accuracy", metrics['top1_accuracy'], 1)
-        # tb_writter.add_scalar(f"top{metrics['k']}_accuracy", metrics['topk_accuracy'], 1)
-        # for key in ["mean", "std"]:
-        #     tb_writter.add_scalar(f"fluency/{key}", metrics['fluency'][key], 1)
-        #     tb_writter.add_scalar(f"consistency/{key}", metrics['consistency'][key], 1)
-        instruction_evaluation_result = metrics['instruction_evaluation'] 
-        # for key in instruction_evaluation_result:
-        #     tb_writter.add_scalar(f"instruction_evaluation/{key}", instruction_evaluation_result[key], 1)
-        # tb_writter.close()
+        metrics = evluation_result.metrics.to_dict()
+        instruction_evaluation_result = metrics['instruction_evaluation']
+
+        print(f"Instruction evaluation result: {instruction_evaluation_result}")
+        # print(f"Metrics: {metrics}")
         
         with open(result_file, "w") as f:
             json.dump(evluation_result.to_dict(), f)
@@ -119,6 +145,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--prompt_idx", nargs="+", type=int, default=0, help="Which prompt template to apply for evaluation."
     )
+    # parser.add_argument("--chat", action="store_true", default=False, help="Apply chat template")
+    parser.add_argument("--add_marker", action="store_true", default=False, help="Apply marked prompting")
+    parser.add_argument('--marker_start', default='**',
+                        help='highlight start marker (e.g. 👉 )')
+    parser.add_argument('--marker_end', default=None,
+                        help='highlight end marker; defaults to same as start')
+
+    parser.add_argument("--seka", action="store_true", default=False, help="Use SEKA model")
+    parser.add_argument('--pos', type=str, default=None,
+                        help='positive (relevant) projector .pt')
+    parser.add_argument('--neg', type=str, default=None,
+                        help='optional negative (irrelevant) projector .pt')
+    parser.add_argument('--amplify_pos', default=1.5, type=float)
+    parser.add_argument('--amplify_neg', default=0.5, type=float)
+    parser.add_argument('--layers', default='last10',
+                        help="'all' / 'last4' / '0,4,19' …")
     
     args = parser.parse_args()
     main(args)
