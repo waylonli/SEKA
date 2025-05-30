@@ -18,6 +18,9 @@ def main(args: argparse.Namespace):
     datasets.disable_caching()
 
     if args.seka:
+        args.prompt_idx = 3  # SEKA LLM does not support multiple prompt templates
+        logger.info("For")
+
         if "_tanh" in args.pos:
             feature_fn = "tanh"
         elif "_elu" in args.pos:

@@ -402,14 +402,6 @@ def biasbios_instruction_evaluation(
             )
             targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
 
-            inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
-
-            if add_marker:
-                batch['prompt'] = [
-                    prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
-                ]
-                prompts = batch['prompt']
-
             if chat:
                 prompts = [tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
@@ -418,9 +410,13 @@ def biasbios_instruction_evaluation(
                 ) for prompt in prompts]
 
             if seka:
+                # import pdb;
+                # pdb.set_trace()
                 input_ids, steer_mask, attention_mask = encode_with_markers(
-                    prompts, tokenizer,
-                    marker_start, marker_end)
+                    prompts,
+                    tokenizer,
+                    marker_start,
+                    marker_end)
                 input_ids = input_ids.to(model.device)
                 steer_mask = steer_mask.to(model.device)
                 attention_mask = attention_mask.to(model.device)
