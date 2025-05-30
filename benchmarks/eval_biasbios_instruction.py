@@ -4,7 +4,7 @@ import json
 import logging
 import datasets
 import transformers
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 
 from benchmarks.biasbios.preprocess import load_dataset
 from benchmarks.biasbios.evaluate import biasbios_instruction_evaluation, BiosBiasInstructionEvaluationResults
@@ -53,18 +53,18 @@ def main(args: argparse.Namespace):
             f"Evaluation complete! results:\n%s",
             json.dumps(evluation_result.metrics.to_dict(), indent=1),
         )
-        tb_writter = SummaryWriter(log_dir=evaluation_result_dir)
+        # tb_writter = SummaryWriter(log_dir=evaluation_result_dir)
 
         metrics = evluation_result.metrics.to_dict() 
-        tb_writter.add_scalar("top1_accuracy", metrics['top1_accuracy'], 1)
-        tb_writter.add_scalar(f"top{metrics['k']}_accuracy", metrics['topk_accuracy'], 1)
-        for key in ["mean", "std"]:
-            tb_writter.add_scalar(f"fluency/{key}", metrics['fluency'][key], 1)
-            tb_writter.add_scalar(f"consistency/{key}", metrics['consistency'][key], 1)
+        # tb_writter.add_scalar("top1_accuracy", metrics['top1_accuracy'], 1)
+        # tb_writter.add_scalar(f"top{metrics['k']}_accuracy", metrics['topk_accuracy'], 1)
+        # for key in ["mean", "std"]:
+        #     tb_writter.add_scalar(f"fluency/{key}", metrics['fluency'][key], 1)
+        #     tb_writter.add_scalar(f"consistency/{key}", metrics['consistency'][key], 1)
         instruction_evaluation_result = metrics['instruction_evaluation'] 
-        for key in instruction_evaluation_result:
-            tb_writter.add_scalar(f"instruction_evaluation/{key}", instruction_evaluation_result[key], 1)
-        tb_writter.close()
+        # for key in instruction_evaluation_result:
+        #     tb_writter.add_scalar(f"instruction_evaluation/{key}", instruction_evaluation_result[key], 1)
+        # tb_writter.close()
         
         with open(result_file, "w") as f:
             json.dump(evluation_result.to_dict(), f)

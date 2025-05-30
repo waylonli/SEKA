@@ -359,8 +359,7 @@ def biasbios_instruction_evaluation(
     if desc is None:
         desc = "Instruction Evaluation"
 
-    if tfidf_vectorizer is None:
-        tfidf_vectorizer = load_biasbios_tfidf_vectorizer(data_path)
+    tfidf_vectorizer = load_biasbios_tfidf_vectorizer(data_path)
     if references is None:
         references = defaultdict(list)
         for sample in dataset:
