@@ -75,12 +75,16 @@ def precompute_token_ids(
             continue
 
         # Precompute for each casing variant
+        token_ids = []
         for case_label, func in case_funcs.items():
             # Apply the casing function in one comprehension
             cased_target = [func(t) for t in target]
-            precomputed[f"{target_key}.{case_label}.token_id"] = first_token_ids_from_batch(
-                tokenizer, cased_target, target_token_first_space 
+            token_ids.append(
+                first_token_ids_from_batch(
+                    tokenizer, cased_target, target_token_first_space 
+                )
             )
+        precomputed[f"{target_key}.token_id"] = torch.stack(token_ids, dim=1)
 
     if fp32:
         precomputed = _as_fp32(precomputed)

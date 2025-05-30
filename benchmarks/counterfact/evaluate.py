@@ -273,15 +273,8 @@ def counterfact_evaluate(
                 if return_unmediated:
                     target_keys.append("unmediated")
                 for target_key in target_keys:
-                    variant_keys = [
-                        f"target_{target_key}.lower.token_id",
-                        f"target_{target_key}.capitalize.token_id",
-                        f"target_{target_key}.upper.token_id",
-                    ]
-                    # fetch their per‐item log‐probs
-                    variant_ids = torch.stack(
-                        [batch[vk] for vk in variant_keys], dim=1).to(model.device)
-                    target_probs = first_token_logps.gather(dim=1, index=variant_ids) # shape: (3, batch_size)
+                    target_id = batch[f"target_{target_key}.token_id"].to(model.device)
+                    target_probs = first_token_logps.gather(dim=1, index=target_id) # shape: (3, batch_size)
                     # take max across the 3 variants, per batch‐item
                     max_logps, _ = target_probs.max(dim=1)
                     batched_results[f"target_{target_key}_score"] = max_logps.tolist()
