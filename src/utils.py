@@ -20,7 +20,7 @@ def encode_with_markers(text: Union[str, List[str]],
         m_end = m_start
 
     ids_lst, steer_lst, attn_lst = [], [], []
-    import pdb; pdb.set_trace()
+
     pattern = re.escape(m_start) + r'(.*?)' + re.escape(m_end)
 
     for sample in text:
