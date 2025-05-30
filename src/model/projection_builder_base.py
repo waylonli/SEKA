@@ -217,6 +217,17 @@ class ProjectionBuilderBase(abc.ABC):
         hiddens = outputs.hidden_states
         result: list[torch.Tensor] = []
         for L in layers:
+            # h_in = hiddens[L]
+            # attn = model.model.layers[L].self_attn
+
+            # if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+            #     if hasattr(attn, 'k_norm'):
+            #         h_in = model.model.layers[L].input_layernorm(h_in)
+            #         input_shape = h_in.shape[:-1]
+            #         dim_h = model.config.head_dim
+            #         # reshape into (seq_len, heads, head_dim)
+            #         k = attn.k_norm(attn.k_proj(h_in).view(*input_shape, -1, dim_h))[0]
+
             h_in = hiddens[L][0]
             attn = model.model.layers[L].self_attn
 
