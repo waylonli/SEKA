@@ -194,7 +194,7 @@ class ProjectionBuilderBase(abc.ABC):
                         range(num_layers)}
 
         # Visualize using PCA
-        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
         # visualise the head norm differences
         # self.plot_norm_heatmap(norm_diffs, self.model_path, self.layers, output_dir)
