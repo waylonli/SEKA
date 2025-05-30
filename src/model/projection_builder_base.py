@@ -174,18 +174,18 @@ class ProjectionBuilderBase(abc.ABC):
                 output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
 
         # summary
-        # print("\nProjection Summary:")
-        # if applied:
-        #     print(f" ✔ Applied projection: {len(applied)}")
-        #     for L, h, diff in applied:
-        #         print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
-        # if skipped:
-        #     print(f" ✖ Skipped (identity): {len(skipped)}")
-        #     for L, h, diff in skipped:
-        #         print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+        print("\nProjection Summary:")
+        if applied:
+            print(f" ✔ Applied projection: {len(applied)}")
+            for L, h, diff in applied:
+                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+        if skipped:
+            print(f" ✖ Skipped (identity): {len(skipped)}")
+            for L, h, diff in skipped:
+                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
-        # print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
-        # print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
+        print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
+        print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
         # Convert to numpy arrays
         all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
@@ -194,7 +194,7 @@ class ProjectionBuilderBase(abc.ABC):
                         range(num_layers)}
 
         # Visualize using PCA
-        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+        self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
 
         # visualise the head norm differences
         # self.plot_norm_heatmap(norm_diffs, self.model_path, self.layers, output_dir)
@@ -221,6 +221,7 @@ class ProjectionBuilderBase(abc.ABC):
             attn = model.model.layers[L].self_attn
 
             if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+                h_in = model.model.layers[L].input_layernorm(h_in)
                 if hasattr(attn, 'k_norm'):
                     h_in = model.model.layers[L].input_layernorm(h_in)
                     input_shape = h_in.shape[:-1]
@@ -264,7 +265,7 @@ class ProjectionBuilderBase(abc.ABC):
         os.makedirs(output_dir, exist_ok=True)
 
         for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
-            layer_dir = os.path.join(output_dir, f"Layer_{self.layers[L]}")
+            layer_dir = os.path.join(output_dir, f"Layer_{L+1}")
             os.makedirs(layer_dir, exist_ok=True)
 
             for h in range(n_kv):
@@ -298,7 +299,7 @@ class ProjectionBuilderBase(abc.ABC):
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
                 plt.arrow(mean_start[0], mean_start[1], 2*mean_dx, 2*mean_dy,
-                          head_width=1.0, head_length=1.2, color='#003366', linewidth=3.0,  # Bolder dark blue
+                          head_width=0.8, head_length=0.8, color='#003366', linewidth=3.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
                 plt.xlabel("PCA Component 1", fontsize=38)
@@ -308,7 +309,7 @@ class ProjectionBuilderBase(abc.ABC):
                 plt.yticks([])
                 plt.legend(loc='upper right', fontsize=24, frameon=False)
                 plt.tight_layout()
-                plt.savefig(os.path.join(layer_dir, f"Layer_{L}_Head_{h}_pca_pairwise_shift.pdf"), dpi=300)
+                plt.savefig(os.path.join(layer_dir, f"Layer_{L+1}_Head_{h+1}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
 
     @staticmethod

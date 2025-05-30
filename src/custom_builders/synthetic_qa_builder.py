@@ -49,5 +49,5 @@ if __name__ == '__main__':
     )
     builder.run(args.output_dir)
 
-    # norm_diff_14b = torch.load(os.path.join(args.output_dir, 'norm_diffs_Qwen3-1.7B-Base.pt'), weights_only=False)
-    # SynthQABuilder.plot_norm_heatmap(norm_diff_14b, "Qwen3-1.7B-Base", range(28), args.output_dir)
+    # norm_diff_14b = torch.load(os.path.join(args.output_dir, 'norm_diffs_Qwen3-14B-Base.pt'), weights_only=False)
+    # SynthQABuilder.plot_norm_heatmap(norm_diff_14b, "Qwen3-14B-Base", range(40), args.output_dir)
