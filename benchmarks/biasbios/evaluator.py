@@ -159,7 +159,7 @@ class InstructionEvaluator(object):
         for idx_beg in string_begs:
             for idx_end in string_ends:
                 substring = generation[idx_beg:idx_end+1]
-                import pdb; pdb.set_trace()
+                # import pdb; pdb.set_trace()
                 try:
                     json.loads(substring)
                     return True 
