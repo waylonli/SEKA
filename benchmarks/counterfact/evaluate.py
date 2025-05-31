@@ -218,11 +218,12 @@ def counterfact_evaluate(
                     pad_token_id=tokenizer.eos_token_id,
                 )
             elif pasta:
-                inputs, offset_mapping = tokenizer(
+                inputs = tokenizer(
                     prompts, return_tensors="pt", 
                     return_offsets_mapping=True,
                     truncation=True, padding=True
                 ).to(model.device)
+                offset_mapping = inputs.pop("offset_mapping")
                 with pasta.apply_steering(
                     model=model, 
                     strings=prompts, 
@@ -272,12 +273,16 @@ def counterfact_evaluate(
                     target_keys.append("mediated")
                 if return_unmediated:
                     target_keys.append("unmediated")
+                # batch_indices = torch.arange(current_batch_size)
                 for target_key in target_keys:
                     target_id = batch[f"target_{target_key}.token_id"].to(model.device)
                     target_probs = first_token_logps.gather(dim=1, index=target_id) # shape: (3, batch_size)
-                    # take max across the 3 variants, per batch‐item
-                    max_logps, _ = target_probs.max(dim=1)
+                    max_logps, _ = target_probs.max(dim=1) # take max across the 3 variants, per batch‐item
                     batched_results[f"target_{target_key}_score"] = max_logps.tolist()
+                    # target_id = batch[f"target_{target_key}.token_id"]
+                    # target_probs = first_token_logps[batch_indices, target_id]
+                    # target_prob_key = f"target_{target_key}_score"
+                    # batched_results[target_prob_key] = target_probs.tolist()
 
             for bi in range(current_batch_size):
                 result: dict = {k: vs[bi] for k, vs in batched_results.items()}

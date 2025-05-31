@@ -233,11 +233,12 @@ def biasbios_prediction_evaluation(
                     skip_special_tokens=True,
                 )
             elif pasta:
-                inputs, offset_mapping = tokenizer(
+                inputs = tokenizer(
                     prompts, return_tensors="pt", 
                     return_offsets_mapping=True,
                     truncation=True, padding=True
                 ).to(model.device)
+                offset_mapping = inputs.pop("offset_mapping")
                 with pasta.apply_steering(
                     model=model, 
                     strings=prompts, 

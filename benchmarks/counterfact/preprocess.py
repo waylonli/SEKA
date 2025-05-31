@@ -73,6 +73,9 @@ def precompute_token_ids(
         target = sample.get(target_key)
         if target is None or any(t is None for t in target):
             continue
+        # precomputed[f"{target_key}.token_id"] = first_token_ids_from_batch(
+        #     tokenizer, target, target_token_first_space 
+        # )
 
         # Precompute for each casing variant
         token_ids = []
