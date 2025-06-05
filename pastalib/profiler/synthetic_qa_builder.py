@@ -210,24 +210,42 @@ class ProjectionBuilderBase(abc.ABC):
         torch.Tensor]:
         result: list[torch.Tensor] = []
 
-        def _hook(_, args):
-            attn_out = args[0][0] # (seq_len, hidden)
-            dim_h = model.config.head_dim
-            seq_len = attn_out.shape[0]
-            attn_out = attn_out.view(seq_len, -1, dim_h)  # (seq_len, n_heads, h_dim)
+        # def _hook(_, args):
+        #     attn_out = args[0][0] # (seq_len, hidden)
+        #     dim_h = model.config.head_dim
+        #     seq_len = attn_out.shape[0]
+        #     attn_out = attn_out.view(seq_len, -1, dim_h)  # (seq_len, n_heads, h_dim)
             
-            if torch.isnan(attn_out).any():
+        #     if torch.isnan(attn_out).any():
+        #         import pdb; pdb.set_trace()
+        #         raise ValueError("h_out contains NaN values")
+            
+        #     attn_out = phi(attn_out.float(), feature).to(torch.float)
+            
+        #     # select only our tokens, and then return per-head slices
+        #     attn_sel = attn_out[indices]  # (n_tokens, n_h, dim_h)
+        #     for h in range(attn_sel.size(1)):
+        #         result.append(attn_sel[:, h, :])
+        
+        # hooks = [model.model.layers[L].self_attn.o_proj.register_forward_pre_hook(_hook) for L in layers]
+        
+        def _hook(_, __, output: torch.Tensor):
+            k_out = output.transpose(1, 2) # (bsz, kv_heads, seq_len, hidden)
+            num_key_value_groups = model.config.num_attention_heads // model.config.num_key_value_heads
+            k_out_repeated = torch.repeat_interleave(k_out, num_key_value_groups, dim=1).transpose(1, 2)[0]  # (seq_len, n_heads, h_dim)
+            
+            if torch.isnan(k_out_repeated).any():
                 import pdb; pdb.set_trace()
                 raise ValueError("h_out contains NaN values")
             
-            attn_out = phi(attn_out.float(), feature).to(torch.float)
+            k_out_repeated = phi(k_out_repeated.float(), feature).to(torch.float)
             
             # select only our tokens, and then return per-head slices
-            attn_sel = attn_out[indices]  # (n_tokens, n_h, dim_h)
-            for h in range(attn_sel.size(1)):
-                result.append(attn_sel[:, h, :])
+            k_out_sel = k_out_repeated[indices]  # (n_tokens, n_h, dim_h)
+            for h in range(k_out_sel.size(1)):
+                result.append(k_out_sel[:, h, :])
 
-        hooks = [model.model.layers[L].self_attn.o_proj.register_forward_pre_hook(_hook) for L in layers]
+        hooks = [model.model.layers[L].self_attn.k_norm.register_forward_hook(_hook) for L in layers]
         
         inputs = tokenizer(text, return_tensors='pt', add_special_tokens=False).to(model.device)
         outputs = model(**inputs)

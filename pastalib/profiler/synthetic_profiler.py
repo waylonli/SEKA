@@ -1,5 +1,6 @@
 import json
 import re
+import os
 import string
 from collections import Counter
 from typing import Set, List, Tuple, Dict
@@ -78,7 +79,7 @@ def evaluate_head(
     total_em = 0
     total_f1 = 0.0
     n_examples = 0
-    batch_size = 64
+    batch_size = 200
 
     batch_prompts: List[str] = []
     batch_rels:    List[str] = []
@@ -225,10 +226,10 @@ def profile_heads(
 
 def main():
      # 1) load model + tokenizer
-    MODEL_NAME = "/mnt/data/models/Qwen3-4B-Base"
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, padding_side="left")
+    MODEL_NAME = "Qwen3-8B-Base"
+    tokenizer = AutoTokenizer.from_pretrained(os.path.join("/mnt/data/models", MODEL_NAME), padding_side="left")
     model     = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+        os.path.join("/mnt/data/models", MODEL_NAME),
         torch_dtype="auto",
         device_map="auto",
         attn_implementation="eager"
@@ -254,7 +255,7 @@ def main():
     )
     
     # 5) save
-    save_path = "/mnt/data/nyc/SEKA/pastalib/config/Qwen3-4B-Base.json"
+    save_path = f"/mnt/data/nyc/SEKA/pastalib/config/{MODEL_NAME}.json"
     with open(save_path, 'w') as f:
         json.dump(head_config, f, indent=4)
 

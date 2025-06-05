@@ -35,6 +35,20 @@ python benchmarks/eval_fact_gen.py \
     --amplify-pos 2.0 \
     --layers all
 ```
+PASTA
+```
+python benchmarks/eval_fact_gen.py \
+    --model {model-name-or-path} \
+    --data_path data/counterfact \
+    --add_unmediated_fact True \
+    --benchmarks efficacy paraphrase \
+    --output_dir {path-to-output-dir} \
+    --pasta \
+    --head_config {path-to-head-config} \
+    --pasta_alpha 0.01 \
+    --scale_position exclude \
+    --overwrite_output_dir
+```
 
 ## Biasbios
 ### Setup
@@ -69,4 +83,17 @@ python benchmarks/eval_bias_gen.py \
     --pos {path-to-positive-projection} \
     --amplify_pos 1.0 \
     --layers all
+```
+PASTA
+```
+python benchmarks/eval_bias_gen.py \
+    --model {model-name-or-path} \
+    --data_path data/biasbios/biasbios.json \
+    --output_dir {path-to-output-dir} \
+    --batch_size 64 \
+    --max_new_tokens 64 \
+    --pasta \
+    --head_config {path-to-head-config} \
+    --pasta_alpha 0.01 \
+    --scale_position exclude
 ```
