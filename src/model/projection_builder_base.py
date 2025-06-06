@@ -177,21 +177,21 @@ class ProjectionBuilderBase(abc.ABC):
         print("\nProjection Summary:")
         if applied:
             print(f" ✔ Applied projection: {len(applied)}")
-            for L, h, diff in applied:
-                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+            # for L, h, diff in applied:
+            #     print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
         if skipped:
             print(f" ✖ Skipped (identity): {len(skipped)}")
-            for L, h, diff in skipped:
-                print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
+            # for L, h, diff in skipped:
+            #     print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
         # Convert to numpy arrays
-        all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
-                        range(num_layers)}
-        all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
-                        range(num_layers)}
+        # all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
+        # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
 
         # Visualize using PCA
         # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
