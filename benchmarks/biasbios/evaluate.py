@@ -466,6 +466,35 @@ def biasbios_instruction_evaluation(
                     outputs.sequences[:, input_ids.shape[1] :],
                     skip_special_tokens=True,
                 )
+            elif pasta:
+                # Prepare PASTA-steered generation (structure matches above for clarity)
+                # Tokenize as in the PASTA section of biasbios_prediction_evaluation
+                inputs = tokenizer(
+                    prompts, return_tensors="pt",
+                    return_offsets_mapping=True,
+                    truncation=True, padding=True
+                ).to(model.device)
+                offset_mapping = inputs.pop("offset_mapping")
+                with pasta.apply_steering(
+                        model=model,
+                        strings=prompts,
+                        substrings=attributes,
+                        model_input=inputs,
+                        offsets_mapping=offset_mapping
+                ) as steered_model:
+                    outputs = steered_model.generate(
+                        **inputs,
+                        return_dict_in_generate=True,
+                        output_scores=True,
+                        max_length=max_length,
+                        max_new_tokens=max_new_tokens,
+                        pad_token_id=tokenizer.eos_token_id,
+                        output_attentions=True,
+                    )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, inputs.input_ids.shape[1]:],
+                    skip_special_tokens=True,
+                )
             else:
                 inputs = tokenizer(prompts, return_tensors="pt",
                                 truncation=True, padding=True).to(model.device)
