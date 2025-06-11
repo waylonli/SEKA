@@ -88,7 +88,7 @@ def run(
         exp_name,
         hlt_full
 ):
-    tok = AutoTokenizer.from_pretrained(model_id)
+    tok = AutoTokenizer.from_pretrained(model_id, padding_side="left")
 
     if not apply_seka:
         mod = AutoModelForCausalLM.from_pretrained(model_id,
@@ -111,6 +111,8 @@ def run(
             layers=seka_layers,
             amplify_pos=seka_amplify_pos,
             amplify_neg=seka_amplify_neg,
+            attn_implementation="sdpa",
+            torch_dtype=torch.bfloat16
         )
 
     base_dir   = Path("benchmarks/lost_in_the_middle")
