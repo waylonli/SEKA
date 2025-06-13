@@ -232,28 +232,21 @@ class ProjectionBuilderBase(abc.ABC):
                 input_shape = h_in.shape[:-1]
                 hidden_shape = (*input_shape, -1, model.config.head_dim)
                 k = attn.k_proj(h_in).view(hidden_shape).transpose(1, 2)
-
-            # h_in = hiddens[L][0]
-            # attn = model.model.layers[L].self_attn
-
-            # if "qwen3" in model.model.layers[L].__class__.__name__.lower():
-            #     if hasattr(attn, 'k_norm'):
-            #         n_kv = model.config.num_key_value_heads
-            #         dim_h = model.config.head_dim
-            #         # reshape into (seq_len, heads, head_dim)
-            #         k = attn.k_proj(h_in).view(-1, n_kv, dim_h)
-            #         k = attn.k_norm(k).view(-1, n_kv, dim_h)
             else:
                 raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}. Currently only Qwen3 models are supported.")
 
-            # check if k contains nan
+            # check if k contains nan\
             if torch.isnan(k).any():
                 import pdb; pdb.set_trace()
                 raise ValueError("k contains NaN values")
 
             k = phi(k.float(), feature).to(torch.float)
             # select only our tokens, and then return per-head slices
-            k_sel = k[indices]  # (n_tokens, n_kv, dim_h)
+            if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+                k_sel = k[indices]  # (n_tokens, n_kv, dim_h)
+            elif "llama" in model.model.layers[L].__class__.__name__.lower():
+                k_sel = k[:, :, indices]
+
             for h in range(k_sel.size(1)):
                 result.append(k_sel[:, h, :])
 
