@@ -175,7 +175,7 @@ if __name__ == "__main__":
     BENCHMARKS = (
         "efficacy",
         "paraphrase",
-        "generation",
+        # "generation",
     )
     
     parser = argparse.ArgumentParser(description="Evaluate CounterFact")

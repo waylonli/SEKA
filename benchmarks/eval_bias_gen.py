@@ -54,7 +54,7 @@ def main(args: argparse.Namespace):
         model = transformers.AutoModelForCausalLM.from_pretrained(
             args.model, 
             torch_dtype="auto",
-            device_map="auto"
+            device_map="auto",
         )
         tokenizer = transformers.AutoTokenizer.from_pretrained(args.model, padding_side="left")
         if args.pasta:
