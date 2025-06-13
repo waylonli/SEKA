@@ -231,7 +231,8 @@ class ProjectionBuilderBase(abc.ABC):
                 h_in = model.model.layers[L].input_layernorm(h_in)
                 input_shape = h_in.shape[:-1]
                 hidden_shape = (*input_shape, -1, model.config.head_dim)
-                k = attn.k_proj(h_in).view(hidden_shape).transpose(1, 2)
+                # reshape into (seq_len, heads, head_dim)
+                k = attn.k_proj(h_in).view(hidden_shape).squeeze()
             else:
                 raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}. Currently only Qwen3 models are supported.")
 
@@ -242,10 +243,7 @@ class ProjectionBuilderBase(abc.ABC):
 
             k = phi(k.float(), feature).to(torch.float)
             # select only our tokens, and then return per-head slices
-            if "qwen3" in model.model.layers[L].__class__.__name__.lower():
-                k_sel = k[indices]  # (n_tokens, n_kv, dim_h)
-            elif "llama" in model.model.layers[L].__class__.__name__.lower():
-                k_sel = k[:, :, indices]
+            k_sel = k[indices]  # (n_tokens, n_kv, dim_h)
 
             for h in range(k_sel.size(1)):
                 result.append(k_sel[:, h, :])
