@@ -186,3 +186,12 @@ projections
 
 train
 profile_results
+
+tmp
+src_pool
+benchmarks_old
+projections
+
+train
+profile_results
+*.sh
