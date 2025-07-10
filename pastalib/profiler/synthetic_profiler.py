@@ -2,11 +2,16 @@ import json
 import re
 import os
 import string
+import argparse
 from collections import Counter
 from typing import Set, List, Tuple, Dict
 from tqdm import tqdm
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer,
+    Gemma3ForCausalLM
+)
 
 from pastalib.pasta import PASTA
 
@@ -224,12 +229,17 @@ def profile_heads(
     return head_config
 
 
-def main():
+def main(args):
      # 1) load model + tokenizer
-    MODEL_NAME = "Qwen3-8B-Base"
-    tokenizer = AutoTokenizer.from_pretrained(os.path.join("/mnt/data/models", MODEL_NAME), padding_side="left")
-    model     = AutoModelForCausalLM.from_pretrained(
-        os.path.join("/mnt/data/models", MODEL_NAME),
+    if "qwen3" in args.model_path.lower():
+        model_cls = AutoModelForCausalLM
+    elif "gemma-3" in args.model_path.lower():
+        model_cls = Gemma3ForCausalLM
+    else:
+        raise ValueError
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, padding_side="left")
+    model = model_cls.from_pretrained(
+        args.model_path,
         torch_dtype="auto",
         device_map="auto",
         attn_implementation="eager"
@@ -255,9 +265,12 @@ def main():
     )
     
     # 5) save
-    save_path = f"/mnt/data/nyc/SEKA/pastalib/config/{MODEL_NAME}.json"
-    with open(save_path, 'w') as f:
+    with open(args.save_path, 'w') as f:
         json.dump(head_config, f, indent=4)
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_path', required=True)
+    parser.add_argument('--save_path', required=True)
+    args = parser.parse_args()
+    main(args)

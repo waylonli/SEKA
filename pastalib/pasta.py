@@ -53,7 +53,8 @@ class PASTA(abc.ABC):
         "mistral": "model.layers.{}.self_attn",
         "gemma": "model.layers.{}.self_attn",
         "phi3mini": "model.layers.{}.self_attn",
-        "qwen3": "model.layers.{}.self_attn"
+        "qwen3": "model.layers.{}.self_attn",
+        "gemma3": "model.layers.{}.self_attn",
     }
     ATTENTION_MASK_ARGIDX = {
         "gptj": 2, 
@@ -100,6 +101,9 @@ class PASTA(abc.ABC):
             self.num_attn_head = model.config.num_attention_heads
         elif isinstance(model, transformers.Qwen3ForCausalLM):
             self.model_name = "qwen3"
+            self.num_attn_head = model.config.num_attention_heads
+        elif isinstance(model, transformers.Gemma3ForCausalLM):
+            self.model_name = "gemma3"
             self.num_attn_head = model.config.num_attention_heads
         else:
             raise ValueError("Unimplemented Model Type.")
@@ -180,6 +184,7 @@ class PASTA(abc.ABC):
         if "attention_mask" in input_kwargs:
             attention_mask = input_kwargs['attention_mask'].clone().detach()
         elif input_args is not None:
+            raise NotImplementedError
             arg_idx = self.ATTENTION_MASK_ARGIDX[self.model_name]
             attention_mask = input_args[arg_idx].clone().detach()
         else:
@@ -216,6 +221,7 @@ class PASTA(abc.ABC):
             input_kwargs['attention_mask'] = attention_mask 
             return input_args, input_kwargs
         else:
+            raise NotImplementedError
             return (input_args[:arg_idx], attention_mask, input_args[arg_idx+1:]), input_kwargs
 
 

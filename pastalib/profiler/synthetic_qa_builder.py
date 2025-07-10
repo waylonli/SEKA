@@ -4,7 +4,11 @@ import os
 
 from sklearn.decomposition import PCA
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM, 
+    AutoTokenizer,
+    Gemma3ForCausalLM
+)
 from src.utils import phi, _parse_layers
 import numpy as np
 import matplotlib.pyplot as plt
@@ -37,11 +41,18 @@ class ProjectionBuilderBase(abc.ABC):
         self.chat = chat
         self.device = device
 
+        if "qwen3" in model_path.lower(): 
+            model_cls = AutoModelForCausalLM
+        elif "gemma-3" in model_path.lower():
+            model_cls = Gemma3ForCausalLM
+        else:
+            raise ValueError
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, max_length=9000)
         self.model = (
-            AutoModelForCausalLM
+            model_cls
             .from_pretrained(model_path).to(device).eval()
         )
+    
         self.layers = _parse_layers(layers, len(self.model.model.layers))
 
     def iter_examples(self):
@@ -146,8 +157,6 @@ class ProjectionBuilderBase(abc.ABC):
 
                 # decide
                 if norm_value < self.min_diff:
-                    # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
-                    # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
                     skipped.append((self.layers[L], h, norm_value))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
                     Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
@@ -155,26 +164,8 @@ class ProjectionBuilderBase(abc.ABC):
                 else:
                     applied.append((self.layers[L], h, norm_value))
 
-        #         Pp_heads.append(Pp)
-        #         Pn_heads.append(Pn)
-
-        #     pos_list.append(torch.stack(Pp_heads, dim=0))  # (H,d,d)
-        #     neg_list.append(torch.stack(Pn_heads, dim=0))
-
-        # # stack layers → (num_layers, H, d, d)
-        # pos_proj = torch.stack(pos_list, dim=0)
-        # neg_proj = torch.stack(neg_list, dim=0)
-
         # save
         os.makedirs(output_dir, exist_ok=True)
-
-
-        # torch.save({'layers': self.layers, 'proj': pos_proj.cpu()}, os.path.join(output_dir,
-        #                  f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
-        #         output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
-        # torch.save({'layers': self.layers, 'proj': neg_proj.cpu()}, os.path.join(output_dir,
-        #                  f"{self.model_path.split('/')[-1]}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(
-        #         output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
 
         # summary
         print("\nProjection Summary:")
@@ -192,8 +183,6 @@ class ProjectionBuilderBase(abc.ABC):
             for L, h, diff in skipped:
                 print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
-        # print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
-        # print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -210,42 +199,24 @@ class ProjectionBuilderBase(abc.ABC):
         torch.Tensor]:
         result: list[torch.Tensor] = []
 
-        # def _hook(_, args):
-        #     attn_out = args[0][0] # (seq_len, hidden)
-        #     dim_h = model.config.head_dim
-        #     seq_len = attn_out.shape[0]
-        #     attn_out = attn_out.view(seq_len, -1, dim_h)  # (seq_len, n_heads, h_dim)
+        def _hook(_, args):
+            attn_out = args[0][0] # (seq_len, hidden)
+            dim_h = model.config.head_dim
+            seq_len = attn_out.shape[0]
+            attn_out = attn_out.view(seq_len, -1, dim_h)  # (seq_len, n_heads, h_dim)
             
-        #     if torch.isnan(attn_out).any():
-        #         import pdb; pdb.set_trace()
-        #         raise ValueError("h_out contains NaN values")
-            
-        #     attn_out = phi(attn_out.float(), feature).to(torch.float)
-            
-        #     # select only our tokens, and then return per-head slices
-        #     attn_sel = attn_out[indices]  # (n_tokens, n_h, dim_h)
-        #     for h in range(attn_sel.size(1)):
-        #         result.append(attn_sel[:, h, :])
-        
-        # hooks = [model.model.layers[L].self_attn.o_proj.register_forward_pre_hook(_hook) for L in layers]
-        
-        def _hook(_, __, output: torch.Tensor):
-            k_out = output.transpose(1, 2) # (bsz, kv_heads, seq_len, hidden)
-            num_key_value_groups = model.config.num_attention_heads // model.config.num_key_value_heads
-            k_out_repeated = torch.repeat_interleave(k_out, num_key_value_groups, dim=1).transpose(1, 2)[0]  # (seq_len, n_heads, h_dim)
-            
-            if torch.isnan(k_out_repeated).any():
+            if torch.isnan(attn_out).any():
                 import pdb; pdb.set_trace()
                 raise ValueError("h_out contains NaN values")
             
-            k_out_repeated = phi(k_out_repeated.float(), feature).to(torch.float)
+            attn_out = phi(attn_out.float(), feature).to(torch.float)
             
             # select only our tokens, and then return per-head slices
-            k_out_sel = k_out_repeated[indices]  # (n_tokens, n_h, dim_h)
-            for h in range(k_out_sel.size(1)):
-                result.append(k_out_sel[:, h, :])
-
-        hooks = [model.model.layers[L].self_attn.k_norm.register_forward_hook(_hook) for L in layers]
+            attn_sel = attn_out[indices]  # (n_tokens, n_h, dim_h)
+            for h in range(attn_sel.size(1)):
+                result.append(attn_sel[:, h, :])
+        
+        hooks = [model.model.layers[L].self_attn.o_proj.register_forward_pre_hook(_hook) for L in layers]
         
         inputs = tokenizer(text, return_tensors='pt', add_special_tokens=False).to(model.device)
         outputs = model(**inputs)
