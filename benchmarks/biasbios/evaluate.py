@@ -6,7 +6,7 @@ from tqdm import tqdm
 from dataclasses import dataclass
 from dataclasses_json import DataClassJsonMixin
 from sklearn.feature_extraction.text import TfidfVectorizer
-
+from anchoring import spa_tokenize, SPALogitsProcessor
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
 from benchmarks.biasbios.preprocess import _load_bias_in_bios
@@ -141,6 +141,8 @@ def biasbios_prediction_evaluation(
     chat: bool = False,
     seka: bool = False,
     pasta: PASTA | None = None,
+    anchor: bool = False,
+    anchor_strength: float = 1.6,
 ) -> BiasBiosEvaluationResults:
     """Run BiasBios prediction benchmark (case-insensitive evaluation)."""
 
@@ -157,7 +159,8 @@ def biasbios_prediction_evaluation(
 
     # Canonical labels (lowercase)
     labels = sorted({x["target_mediated"].lower() for x in dataset})
-    label_add_space = False
+    label_add_space = False if not "gemma" in model.__class__.__name__.lower() else True
+    # label_add_space = True
 
     def all_case_variants(label):
         # Extend as needed
@@ -191,15 +194,22 @@ def biasbios_prediction_evaluation(
         samples = []
         for batch in tqdm(loader, desc=desc):
             ids = batch["id"]
-            prompts = batch["prompt"]
             targets = [t.lower() for t in batch["target_mediated"]]
-            targets_idx = [label_to_token_ids[t][0] for t in targets]  # Use first variant for target
 
+
+            if "gemma" in model.__class__.__name__.lower():
+                batch["prompt"] = [p.strip() for p in batch["prompt"]]
+            elif hasattr(model, "model") and "gemma3" in model.model.__class__.__name__.lower():
+                batch["prompt"] = [p.strip() for p in batch["prompt"] if p.strip()]
+            
+            targets_idx = [label_to_token_ids[t][0] for t in targets]  # Use first variant for target
+            
             if add_marker:
                 batch['prompt'] = [
                     prompt.replace(attr, marker_start+attr+marker_end) for prompt,attr in zip(batch['prompt'], batch['attribute'])
                 ]
-                prompts = batch['prompt']
+            
+            prompts = batch['prompt']
 
             if chat:
                 prompts = [tokenizer.apply_chat_template(
@@ -215,6 +225,7 @@ def biasbios_prediction_evaluation(
                 input_ids = input_ids.to(model.device)
                 steer_mask = steer_mask.to(model.device)
                 attention_mask = attention_mask.to(model.device)
+
                 outputs = model.generate(
                     ids=input_ids,
                     steer=True,
@@ -253,9 +264,45 @@ def biasbios_prediction_evaluation(
                         max_new_tokens=max_new_tokens,
                         pad_token_id=tokenizer.eos_token_id,
                         output_attentions=True,
+                        do_sample=False,
                     )
                 generations = tokenizer.batch_decode(
                     outputs.sequences[:, inputs.input_ids.shape[1] :],
+                    skip_special_tokens=True,
+                )
+            elif anchor:
+                # Create SPA logits processor
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+                main_inputs, aux_inputs, mask_token = spa_tokenize(
+                    prompt_with_anchors=prompts[0],
+                    tokenizer=tokenizer,
+                    global_anchors=[],
+                    device=model.device
+                )
+                anchor_processor = SPALogitsProcessor(
+                    aux_model=model,
+                    aux_input_ids=aux_inputs,
+                    strength=anchor_strength,
+                    modulated_by_prob=False,
+                    use_attention_mask=True,
+                    mask_token=mask_token,
+                    tokenizer=tokenizer
+                )
+
+                # import pdb; pdb.set_trace()
+                # Generate text with SPA
+                outputs = model.generate(
+                    input_ids=main_inputs,
+                    attention_mask=torch.ones_like(main_inputs),
+                    logits_processor=[anchor_processor],
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, main_inputs.shape[1]:],
                     skip_special_tokens=True,
                 )
             else:
@@ -267,6 +314,7 @@ def biasbios_prediction_evaluation(
                     max_length=max_length,
                     max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
+                    do_sample=False,
                 )
                 generations = tokenizer.batch_decode(
                     outputs.sequences[:, inputs.input_ids.shape[1] :],
@@ -359,6 +407,8 @@ def biasbios_instruction_evaluation(
     chat: bool = False,
     seka: bool = False,
     pasta: PASTA | None = None,
+    anchor: bool = False,
+    anchor_strength: float = 1.6,
 ) -> BiosBiasInstructionEvaluationResults:
     """ Evaluate the instruction following tasks  
 
@@ -431,6 +481,12 @@ def biasbios_instruction_evaluation(
             )
             targets_idx = first_token_ids_from_batch(tokenizer, targets, add_space=label_add_space)
 
+            if add_marker:
+                prompts = [
+                    prompt.replace(instruct, marker_start + instruct + marker_end)
+                    for prompt, instruct in zip(prompts, instructions)
+                ]
+
             if chat:
                 prompts = [tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
@@ -439,8 +495,6 @@ def biasbios_instruction_evaluation(
                 ) for prompt in prompts]
 
             if seka:
-                # import pdb;
-                # pdb.set_trace()
                 input_ids, steer_mask, attention_mask = encode_with_markers(
                     prompts,
                     tokenizer,
@@ -495,15 +549,50 @@ def biasbios_instruction_evaluation(
                     outputs.sequences[:, inputs.input_ids.shape[1]:],
                     skip_special_tokens=True,
                 )
+            elif anchor:
+                # Create SPA logits processor
+                main_inputs, aux_inputs, mask_token = spa_tokenize(
+                    prompt_with_anchors=prompts[0],
+                    tokenizer=tokenizer,
+                    global_anchors=[],
+                    device=model.device
+                )
+                anchor_processor = SPALogitsProcessor(
+                    aux_model=model,
+                    aux_input_ids=aux_inputs,
+                    strength=anchor_strength,
+                    modulated_by_prob=False,
+                    use_attention_mask=True,
+                    mask_token=mask_token,
+                    tokenizer=tokenizer
+                )
+                # Generate text with SPA
+                outputs = model.generate(
+                    input_ids=main_inputs,
+                    attention_mask=torch.ones_like(main_inputs),
+                    logits_processor=[anchor_processor],
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+                generations = tokenizer.batch_decode(
+                    outputs.sequences[:, main_inputs.shape[1]:],
+                    skip_special_tokens=True,
+                )
             else:
+                tokenizer.pad_token_id = tokenizer.eos_token_id
                 inputs = tokenizer(prompts, return_tensors="pt",
-                                truncation=True, padding=True).to(model.device)
+                                truncation=True, padding=True,
+                                ).to(model.device)
                 outputs = model.generate(**inputs,
                     return_dict_in_generate=True,
                     output_scores=True,
                     max_length=max_length,
                     max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
+                    do_sample=False,
                 )
                 generations = tokenizer.batch_decode(
                     outputs.sequences[:, inputs.input_ids.shape[1] :],
@@ -547,8 +636,7 @@ def biasbios_instruction_evaluation(
                     instruction_evaluation=instruction_evaluation, 
                     sample_attn_scores=None, 
                 )
-                # import pdb;
-                # pdb.set_trace()
+
                 samples.append(sample)
 
     n_correct_top1 = sum(x.predictions[0] == x.target for x in samples)

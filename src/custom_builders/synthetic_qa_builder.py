@@ -31,7 +31,11 @@ if __name__ == '__main__':
     parser.add_argument('--min_diff', type=float, default=2)
     parser.add_argument('--chat', action='store_true')
     parser.add_argument('--output_dir', required=True)
+
     args = parser.parse_args()
+
+    # log the namespace
+    print("Arguments:", args)
 
     builder = SynthQABuilder(
         model_path=args.model,
@@ -41,7 +45,7 @@ if __name__ == '__main__':
         feature=args.feature,
         max_samples=args.max_samples,
         min_diff=args.min_diff,
-        chat=args.chat
+        chat=args.chat,
     )
     builder.run(args.output_dir)
 

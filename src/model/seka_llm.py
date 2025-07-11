@@ -29,20 +29,20 @@ class SEKALLM:
 
         # ----- HF objects -----
         self.name_or_path = f"SEKA-{model_or_path}"
-        self.tok: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_or_path, **hf_kwargs)
+        self.tok: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_or_path, padding_side="left", **hf_kwargs)
 
         if multi_gpu:
             # shard across all GPUs
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path,
                 device_map="auto",
-                use_cache=False,
+                # use_cache=False,
                 **hf_kwargs
             ).eval()
         else:
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path,
-                use_cache=False,
+                # use_cache=False,
                 **hf_kwargs
             ).to(device).eval()
 
@@ -140,7 +140,7 @@ class SEKALLM:
         amplify_neg    = self.amplify_neg    if amplify_neg is None else amplify_neg
         feature_function = self.feature_function if feature_function is None else feature_function
 
-        n_layers = len(self.model.model.layers)
+        n_layers = len(self.model.model.layers) if "gemma3" not in self.model.__class__.__name__.lower() else len(self.model.language_model.model.layers)
         dtype = torch.float32
 
         # load projections on first device (cheap to move later)
@@ -162,80 +162,78 @@ class SEKALLM:
         m_dev = (steer_mask_tensor if steer_mask_tensor is None
                  else steer_mask_tensor.unsqueeze(0) if steer_mask_tensor.dim() == 1
                  else steer_mask_tensor).to(first_dev) if steer_mask_tensor is not None else None
+        
 
         # pick correct root (handles DataParallel etc.)
         root = self.model.module if hasattr(self.model, "module") else self.model
 
         # register hooks
         for L in sel_layers:
-            attn = root.model.layers[L].self_attn
+            attn = root.model.layers[L].self_attn if "gemma3" not in root.__class__.__name__.lower() else root.language_model.model.layers[L].self_attn
             mod  = attn.k_norm if hasattr(attn, "k_norm") else attn.k_proj
-            
+
             # Move tensors to layer's device
             layer_device = next(mod.parameters()).device
             m_dev = m_dev.to(layer_device) if m_dev is not None else None
             Pp_layer = P_pos[L].to(layer_device) # (H, D, D)
             Pn_layer = P_neg[L].to(layer_device) if P_neg else None
-                
-            def _hook(_, __, k_in,
-                m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
-                gp=amplify_pos, gn=amplify_neg
-            ):
-                B, T, H, D = k_in.shape
-                if (Pp.sum() == 0 # if nothing to do, return
-                    or m is None or m.shape != (B, T) or m.sum() == 0): # if no mask or mask all zero, return
-                    return k_in
 
-                k_feat = phi(k_in, feature_function) # -> (B, T, H, D)
+            def _hook(_, __, k_in,
+                      m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
+                      gp=amplify_pos, gn=amplify_neg
+                      ):
                 
-                # Projection
-                k_sel = k_feat[m].to(Pp.dtype) # (N_sel, H, D)
-                pos = torch.einsum('n h d, h d k -> n h k', k_sel, Pp) # k @ Pp
+                # k_in can be [B,T,H,D] or [B,T,D]
+                need_transpose = False
+
+                if k_in.dim() == 4:
+                    B, T, H, D = k_in.shape
+                    k_view = k_in
+                elif k_in.dim() == 3:
+                    B, T, D_all = k_in.shape
+                    H = Pp.shape[0]
+                    D = Pp.shape[1]
+                    assert D_all == H * D, f"Dim mismatch: {D_all} != {H}*{D}"
+                    k_view = k_in.view(B, T, H, D)
+                else:
+                    raise ValueError(f"Unsupported k_in shape: {k_in.shape}")
+
+                if (Pp.sum() == 0 or m is None or m.sum() == 0):
+                    return k_in
+                
+
+                if m.shape != (B, T):
+                    if m.shape == (B, H):
+                        # transpose k_in to [B, T, H, D]
+                        k_view = k_view.transpose(1, 2)  # (B, H, T, D)
+                        need_transpose = True
+                    else:
+                        return k_in  # no steering if mask shape is unexpected
+
+                k_feat = phi(k_view, feature_function)  # (B, T, H, D)
+                k_sel = k_feat[m].to(Pp.dtype)  # (N_sel, H, D)
+                pos = torch.einsum('n h d, h d k -> n h k', k_sel, Pp)
+                
                 if Pn is not None:
-                    neg = torch.einsum('n h d, h d k -> n h k', k_sel, Pn) # k @ Pn
+                    neg = torch.einsum('n h d, h d k -> n h k', k_sel, Pn)
                     delta = (gp * pos + gn * neg) / 2
                 else:
                     delta = gp * pos
-                
-                # Apply delta
+
                 k_feat[m] += delta.to(k_feat.dtype)
                 k_out = phi_inv(k_feat, feature_function)
 
-                return k_out
+                if need_transpose:
+                    k_out = k_out.transpose(1, 2)
 
-            def _hook_sep(_, __, k_in,
-                          m=m_dev, Pp=Pp_layer, Pn=Pn_layer,
-                          gp=amplify_pos, gn=amplify_neg):
-                """
-                • Positive steering on tokens where m == True
-                • Negative steering on tokens where m == False
-                """
-                B, T, H, D = k_in.shape
-                if (Pp.sum() == 0  # nothing to project
-                        or m is None or m.shape != (B, T)):  # bad/no mask
-                    return k_in
-
-                k_feat = phi(k_in, feature_function)  # (B, T, H, D)
-
-                # ---- positive tokens ------------------------------------------------
-                if m.sum() > 0:
-                    k_pos = k_feat[m].to(Pp.dtype)  # (N_pos, H, D)
-                    delta_pos = gp * torch.einsum('n h d, h d k -> n h k', k_pos, Pp)
-                    k_feat[m] += delta_pos.to(k_feat.dtype)
-
-                # ---- negative tokens ------------------------------------------------
-                if Pn is not None:
-                    neg_mask = ~m
-                    if neg_mask.sum() > 0:
-                        k_neg = k_feat[neg_mask].to(Pn.dtype)  # (N_neg, H, D)
-                        delta_neg = gn * torch.einsum('n h d, h d k -> n h k', k_neg, Pn)
-                        k_feat[neg_mask] += delta_neg.to(k_feat.dtype)
-
-                k_out = phi_inv(k_feat, feature_function)
-                return k_out
+                # Return in original shape
+                if k_in.dim() == 4:
+                    return k_out
+                else:
+                    return k_out.contiguous().view(B, T, H * D)
+                
 
             self._hooks.append(mod.register_forward_hook(_hook))
-            # self._hooks.append(mod.register_forward_hook(_hook_sep))
 
         if not silence:
             print(f"✅ Steering hooks attached on layers {sel_layers}")

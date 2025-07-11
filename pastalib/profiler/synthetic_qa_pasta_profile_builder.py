@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 
 torch.set_grad_enabled(False)
 
-class ProjectionBuilderBase(abc.ABC):
+class PASTAProjectionBuilderBase(abc.ABC):
     def __init__(
         self,
         model_path: str,
@@ -42,7 +42,11 @@ class ProjectionBuilderBase(abc.ABC):
             AutoModelForCausalLM
             .from_pretrained(model_path).to(device).eval()
         )
-        self.layers = _parse_layers(layers, len(self.model.model.layers))
+
+        if not "gemma3" in self.model.__class__.__name__.lower():
+            self.layers = _parse_layers(layers, len(self.model.model.layers))
+        else:
+            self.layers = _parse_layers(layers, len(self.model.language_model.model.layers))
 
     def iter_examples(self):
         with open(self.data_path) as f:
@@ -60,7 +64,7 @@ class ProjectionBuilderBase(abc.ABC):
     def run(self, output_dir):
         # 1) buffers per layer, per head
         num_layers = len(self.layers)
-        n_heads    = self.model.config.num_attention_heads
+        n_heads    = self.model.config.num_attention_heads if not "gemma3" in self.model.__class__.__name__.lower() else self.model.config.text_config.num_attention_heads
         buf_H   = [[[] for _ in range(n_heads)] for _ in range(num_layers)]
         buf_Hp  = [[[] for _ in range(n_heads)] for _ in range(num_layers)]
         buf_Hn  = [[[] for _ in range(n_heads)] for _ in range(num_layers)]
@@ -210,26 +214,7 @@ class ProjectionBuilderBase(abc.ABC):
         torch.Tensor]:
         result: list[torch.Tensor] = []
 
-        # def _hook(_, args):
-        #     attn_out = args[0][0] # (seq_len, hidden)
-        #     dim_h = model.config.head_dim
-        #     seq_len = attn_out.shape[0]
-        #     attn_out = attn_out.view(seq_len, -1, dim_h)  # (seq_len, n_heads, h_dim)
-            
-        #     if torch.isnan(attn_out).any():
-        #         import pdb; pdb.set_trace()
-        #         raise ValueError("h_out contains NaN values")
-            
-        #     attn_out = phi(attn_out.float(), feature).to(torch.float)
-            
-        #     # select only our tokens, and then return per-head slices
-        #     attn_sel = attn_out[indices]  # (n_tokens, n_h, dim_h)
-        #     for h in range(attn_sel.size(1)):
-        #         result.append(attn_sel[:, h, :])
-        
-        # hooks = [model.model.layers[L].self_attn.o_proj.register_forward_pre_hook(_hook) for L in layers]
-        
-        def _hook(_, __, output: torch.Tensor):
+        def _hook_qwen(_, __, output: torch.Tensor):
             k_out = output.transpose(1, 2) # (bsz, kv_heads, seq_len, hidden)
             num_key_value_groups = model.config.num_attention_heads // model.config.num_key_value_heads
             k_out_repeated = torch.repeat_interleave(k_out, num_key_value_groups, dim=1).transpose(1, 2)[0]  # (seq_len, n_heads, h_dim)
@@ -245,8 +230,25 @@ class ProjectionBuilderBase(abc.ABC):
             for h in range(k_out_sel.size(1)):
                 result.append(k_out_sel[:, h, :])
 
-        hooks = [model.model.layers[L].self_attn.k_norm.register_forward_hook(_hook) for L in layers]
-        
+        def _hook_gemma(_, __, output: torch.Tensor):
+            num_key_value_groups = model.config.text_config.num_attention_heads // model.config.text_config.num_key_value_heads     
+            k_out_repeated = torch.repeat_interleave(output, num_key_value_groups, dim=1).transpose(1, 2)[0]  # (seq_len, n_heads, h_dim)
+            
+            if torch.isnan(k_out_repeated).any():
+                import pdb; pdb.set_trace()
+                raise ValueError("h_out contains NaN values")
+            
+            k_out_repeated = phi(k_out_repeated.float(), feature).to(torch.float)
+            
+            # select only our tokens, and then return per-head slices
+
+            k_out_sel = k_out_repeated[indices]  # (n_tokens, n_h, dim_h)
+            for h in range(k_out_sel.size(1)):
+                result.append(k_out_sel[:, h, :])
+
+        hooks = [model.model.layers[L].self_attn.k_norm.register_forward_hook(_hook_qwen) for L in layers] if not "gemma3" in model.__class__.__name__.lower() else \
+                [model.language_model.model.layers[L].self_attn.k_norm.register_forward_hook(_hook_gemma) for L in layers]
+
         inputs = tokenizer(text, return_tensors='pt', add_special_tokens=False).to(model.device)
         outputs = model(**inputs)
         
@@ -264,12 +266,12 @@ if __name__ == '__main__':
     parser.add_argument('--top_pct', type=float, default=0.9)
     parser.add_argument('--feature', type=str, default=None)
     parser.add_argument('--max_samples', type=int, default=1000)
-    parser.add_argument('--min_diff', type=float, default=2)
+    parser.add_argument('--min_diff', type=float, default=0.10)
     parser.add_argument('--chat', action='store_true')
     parser.add_argument('--output_dir', required=True)
     args = parser.parse_args()
 
-    builder = ProjectionBuilderBase(
+    builder = PASTAProjectionBuilderBase(
         model_path=args.model,
         data_path=args.data,
         layers=args.layers,

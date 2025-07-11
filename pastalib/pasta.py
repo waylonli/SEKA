@@ -53,13 +53,15 @@ class PASTA(abc.ABC):
         "mistral": "model.layers.{}.self_attn",
         "gemma": "model.layers.{}.self_attn",
         "phi3mini": "model.layers.{}.self_attn",
-        "qwen3": "model.layers.{}.self_attn"
+        "qwen3": "model.layers.{}.self_attn",
+        "gemma3": "language_model.model.layers.{}.self_attn",
     }
     ATTENTION_MASK_ARGIDX = {
         "gptj": 2, 
         "llama": 1, 
         "mistral": 1, 
         "gemma": 1,
+        "gemma3": 1,
     }
     def __init__(
         self, 
@@ -101,7 +103,11 @@ class PASTA(abc.ABC):
         elif isinstance(model, transformers.Qwen3ForCausalLM):
             self.model_name = "qwen3"
             self.num_attn_head = model.config.num_attention_heads
+        elif isinstance(model, transformers.Gemma3ForConditionalGeneration):
+            self.model_name = "gemma3"
+            self.num_attn_head = model.config.text_config.num_attention_heads
         else:
+            print(model)
             raise ValueError("Unimplemented Model Type.")
         
     def setup_head_config(self, head_config):

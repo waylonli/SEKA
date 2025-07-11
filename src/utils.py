@@ -3,25 +3,25 @@ import re, torch
 from typing import List, Tuple, Union
 from transformers import AutoTokenizer, AutoModel
 
-# ╭──────────────────────── 1. encode_with_marker ───────────────────────╮
-def encode_with_markers(text: Union[str, List[str]],
-                        tokenizer: AutoTokenizer,
-                        m_start: str = '**',
-                        m_end: str = '**') -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def encode_with_markers(
+    text: Union[str, List[str]],
+    tokenizer,
+    m_start: str = '**',
+    m_end: str = '**'
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Accept either a single string or a list of strings and return
-    `(ids[B, S], steer_mask[B, S], attention_mask[B, S])`
-    padded to the longest sequence in the batch.
+    Accepts either a single string or a list of strings and returns:
+    (ids [B, S], steer_mask [B, S], attention_mask [B, S]),
+    all correctly padded using the tokenizer.
     """
     if isinstance(text, str):
-        text = [text]  # unify to a batch
-
+        text = [text]
     if not m_end:
         m_end = m_start
 
-    ids_lst, steer_lst, attn_lst = [], [], []
-
     pattern = re.escape(m_start) + r'(.*?)' + re.escape(m_end)
+    stripped_texts = []
+    spans_all = []
 
     for sample in text:
         pieces, spans, last = [], [], 0
@@ -32,46 +32,33 @@ def encode_with_markers(text: Union[str, List[str]],
             pieces.append(span_content)
             spans.append((start_plain, start_plain + len(span_content)))
             last = m.end()
-
         pieces.append(sample[last:])
         plain_txt = ''.join(pieces)
+        stripped_texts.append(plain_txt)
+        spans_all.append(spans)
 
-        enc = tokenizer(
-            plain_txt,
-            return_offsets_mapping = True,
-            add_special_tokens = False,
-            padding = False,
-        )
+    # Use tokenizer's own batching and special token logic
+    enc = tokenizer(
+        stripped_texts,
+        return_offsets_mapping=True,
+        padding=True,
+        truncation=True,
+        add_special_tokens=True,
+        return_tensors="pt",
+    )
 
-        ids_lst.append(enc['input_ids'])
-        attn_lst.append(enc['attention_mask'])
+    ids = enc['input_ids']
+    attn = enc['attention_mask']
 
-        m = torch.zeros(len(enc['input_ids']), dtype=torch.bool)
-
+    mask = torch.zeros_like(ids, dtype=torch.bool)
+    for b, spans in enumerate(spans_all):
+        # Offsets are (token_start_char, token_end_char) for each token in sentence b
         for s_char, e_char in spans:
-            for tid, (cs, ce) in enumerate(enc['offset_mapping']):
-                if cs >= s_char-1 and ce <= e_char:
-                                    m[tid] = True
+            for tid, (cs, ce) in enumerate(enc['offset_mapping'][b]):
+                # Note: some tokenisers might have (0, 0) for special tokens or paddings
+                if cs >= (s_char-1) and ce <= e_char and not (cs == ce == 0):
+                    mask[b, tid] = True
 
-        steer_lst.append(m)
-
-    # ---------- pad ----------
-    tokenizer.padding_side = "left"
-    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-
-    max_len = max(len(x) for x in ids_lst)
-
-    def _left_pad(seq, pad_val):
-        return [pad_val] * (max_len - len(seq)) + seq
-
-    ids = torch.tensor([_left_pad(s, pad_id) for s in ids_lst])
-    attn = torch.tensor([_left_pad(s, 0) for s in attn_lst])
-    mask = torch.stack([
-        torch.nn.functional.pad(m, (max_len - len(m), 0))  # left‑pad Boolean
-        for m in steer_lst
-    ])
-
-    # import pdb; pdb.set_trace()
     return ids, mask, attn
 
 

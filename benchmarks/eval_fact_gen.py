@@ -18,6 +18,7 @@ from benchmarks.counterfact.evaluate import (
     load_counterfact_tfidf_vectorizer
 )
 from benchmarks.utils.pasta_utils import setup_logger
+from anchoring import SPALogitsProcessor, spa_tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,20 @@ def main(args: argparse.Namespace):
         if not args.add_marker:
             logger.warning("SEKA LLM requires markers, setting add_marker to True.")
             args.add_marker = True
+    elif args.anchor:
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            args.model,
+            torch_dtype="auto",
+            device_map="auto"
+        )
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            args.model,
+            padding_side="left"
+        )
+        args.add_marker = True
+        args.marker_start = "<anchor>"
+        args.marker_end = "</anchor>"
+        logger.info(f"Anchor steering requires markers, setting markers to {args.marker_start} and {args.marker_end}.")
     else:
         model = transformers.AutoModelForCausalLM.from_pretrained(
             args.model, 
@@ -86,7 +101,7 @@ def main(args: argparse.Namespace):
         attribute_no_entity=args.attribute_no_entity,
         example_subset=args.example_subset
     )
-    
+
     results_output_dir = Path(args.output_dir)
     results_output_dir.mkdir(exist_ok=True, parents=True)
     
@@ -114,6 +129,8 @@ def main(args: argparse.Namespace):
                 chat=args.chat,
                 seka=args.seka,
                 pasta=pasta,
+                anchor=args.anchor,
+                anchor_strength=args.anchor_strength,
                 add_marker=args.add_marker,
                 marker_start=args.marker_start,
                 marker_end=args.marker_end,
@@ -130,6 +147,8 @@ def main(args: argparse.Namespace):
                 chat=args.chat,
                 seka=args.seka,
                 pasta=pasta,
+                anchor=args.anchor,
+                anchor_strength=args.anchor_strength,
                 add_marker=args.add_marker,
                 marker_start=args.marker_start,
                 marker_end=args.marker_end,
@@ -244,6 +263,9 @@ if __name__ == "__main__":
     parser.add_argument("--head_config", type=str, default=None, help="PASTA head config for steering")
     parser.add_argument("--pasta_alpha", type=float, default=None, help="Scaling coefficient")
     parser.add_argument("--scale_position", type=str, default=None, help="Steer the selected section or others")
+
+    parser.add_argument("--anchor", action="store_true", default=False, help="Use anchor steering")
+    parser.add_argument("--anchor_strength", type=float, default=1.6, help="Anchor strength for steering")
 
     args = parser.parse_args()
     main(args)

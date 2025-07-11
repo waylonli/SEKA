@@ -42,7 +42,10 @@ class ProjectionBuilderBase(abc.ABC):
             AutoModelForCausalLM
             .from_pretrained(model_path).to(device).eval()
         )
-        self.layers = _parse_layers(layers, len(self.model.model.layers))
+        if not "gemma3" in self.model.__class__.__name__.lower():
+            self.layers = _parse_layers(layers, len(self.model.model.layers))
+        else:
+            self.layers = _parse_layers(layers, len(self.model.language_model.model.layers))
 
     @abc.abstractmethod
     def iter_examples(self):
@@ -57,7 +60,8 @@ class ProjectionBuilderBase(abc.ABC):
     def run(self, output_dir):
         # 1) buffers per layer, per head
         num_layers = len(self.layers)
-        n_kv       = self.model.config.num_key_value_heads
+        # import pdb; pdb.set_trace()
+        n_kv       = self.model.config.num_key_value_heads if "gemma3" not in self.model.__class__.__name__.lower() else self.model.config.text_config.num_key_value_heads
         buf_H   = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
         buf_Hp  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
         buf_Hn  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
@@ -218,23 +222,36 @@ class ProjectionBuilderBase(abc.ABC):
         result: list[torch.Tensor] = []
         for L in layers:
             h_in = hiddens[L]
-            attn = model.model.layers[L].self_attn
+            attn = model.model.layers[L].self_attn if "gemma3" not in model.__class__.__name__.lower() else model.language_model.model.layers[L].self_attn
 
-            if "qwen3" in model.model.layers[L].__class__.__name__.lower():
+            if "qwen3" in model.__class__.__name__.lower():
                 h_in = model.model.layers[L].input_layernorm(h_in)
                 if hasattr(attn, 'k_norm'):
                     input_shape = h_in.shape[:-1]
                     dim_h = model.config.head_dim
                     # reshape into (seq_len, heads, head_dim)
                     k = attn.k_norm(attn.k_proj(h_in).view(*input_shape, -1, dim_h))[0]
-            elif "llama" in model.model.layers[L].__class__.__name__.lower():
+            elif "gemma" in model.__class__.__name__.lower():
+                h_in = model.language_model.model.layers[L].input_layernorm(h_in)
+                if hasattr(attn, 'k_norm'):
+                    input_shape = h_in.shape[:-1]
+                    dim_h = model.config.text_config.head_dim
+                    # reshape into (seq_len, heads, head_dim)
+                    k = attn.k_norm(attn.k_proj(h_in).view(*input_shape, -1, dim_h))[0]
+            elif "llama" in model.__class__.__name__.lower():
                 h_in = model.model.layers[L].input_layernorm(h_in)
                 input_shape = h_in.shape[:-1]
                 hidden_shape = (*input_shape, -1, model.config.head_dim)
                 # reshape into (seq_len, heads, head_dim)
-                k = attn.k_proj(h_in).view(hidden_shape).squeeze()
+                k = attn.k_proj(h_in).view(hidden_shape)[0]
+            elif "mistral" in model.model.layers[L].__class__.__name__.lower():
+                h_in = model.model.layers[L].input_layernorm(h_in)
+                input_shape = h_in.shape[:-1]
+                hidden_shape = (*input_shape, -1, model.config.head_dim)
+                # reshape into (seq_len, heads, head_dim)
+                k = attn.k_proj(h_in).view(hidden_shape)[0]
             else:
-                raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}. Currently only Qwen3 models are supported.")
+                raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}.")
 
             # check if k contains nan\
             if torch.isnan(k).any():

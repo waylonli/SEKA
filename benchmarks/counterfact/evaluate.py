@@ -5,6 +5,8 @@ import scipy
 import numpy as np
 from functools import partial
 from pathlib import Path
+
+from anchoring import spa_tokenize, SPALogitsProcessor
 from tqdm import tqdm
 from dataclasses import dataclass
 from dataclasses_json import DataClassJsonMixin
@@ -41,6 +43,7 @@ class EfficacySample(DataClassJsonMixin):
 
     id: str
     prompt: str
+    generation: str
     target_score: float
     comparator_score: float
     
@@ -73,6 +76,7 @@ class CounterFactEvaluationResult(DataClassJsonMixin):
 
     top_tokens: list[str] | None = None
     top_logps: list[float] | None = None
+    counterfact_prompt: list[str] | None = None
     generations: list[str] | None = None
 
     target_mediated_score: float | None = None
@@ -143,8 +147,11 @@ def counterfact_evaluate(
     chat: bool = False,
     seka: bool = False,
     pasta: PASTA | None = None,
+    anchor: bool = False,
+    anchor_strength: float = 20.0,
 ) -> CounterFactEvaluateRun:
     include_target_probs = "target_mediated" in dataset.column_names
+    tokenizer.pad_token = tokenizer.eos_token
 
     if desc is None:
         desc = f"Evaluate CounterFact"
@@ -163,7 +170,6 @@ def counterfact_evaluate(
     with dataset.formatted_as("torch", columns=columns):
         loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
         for batch in tqdm(loader, desc=desc):
-            prompts = batch["prompt"]
             prompts = batch["prompt"]
             contexts = batch["context"]
             attributes = batch["attribute"]
@@ -190,14 +196,14 @@ def counterfact_evaluate(
                     prompt.replace(attr, marker_start+attr+marker_end) 
                     for prompt, attr in zip(prompts, attributes)
                 ]
-            
+
             if chat:
                 prompts = [tokenizer.apply_chat_template(
                     [{"role": "user", "content": prompt}],
                     tokenize=False,
                     add_generation_prompt=True,
                 ) for prompt in prompts]
-            
+
             # with open("counterfact_prompts.json", 'w') as f:
             #     json.dump(prompts, f, indent=4)
             #     assert False
@@ -217,6 +223,7 @@ def counterfact_evaluate(
                     max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
                 )
+                # import pdb; pdb.set_trace()
             elif pasta:
                 inputs = tokenizer(
                     prompts, return_tensors="pt", 
@@ -243,6 +250,67 @@ def counterfact_evaluate(
                         pad_token_id=tokenizer.eos_token_id,
                         output_attentions=True,
                     )
+            elif anchor:
+                # main_inputs = []
+                # aux_inputs = []
+                # mask_token = []
+                # for prompt in prompts:
+                #     main_inputs_one_prompt, aux_inputs_one_prompt, mask_token_one_prompt = spa_tokenize(
+                #         prompt_with_anchors=prompt,
+                #         tokenizer=tokenizer,
+                #         global_anchors=[],
+                #         device=model.device
+                #     )
+                #     main_inputs.append(main_inputs_one_prompt)
+                #     aux_inputs.append(aux_inputs_one_prompt)
+                #     mask_token.append(mask_token_one_prompt)
+                # import pdb; pdb.set_trace()
+                # # add left padding to main inputs and aux inputs
+                # pad_token_id = tokenizer.eos_token_id
+                # # left-pad main inputs
+                # main_inputs = torch.nn.utils.rnn.pad_sequence(
+                #     [m.squeeze() for m in main_inputs],
+                #     batch_first=True,
+                #     padding_value=pad_token_id,
+                #     padding_side="left"
+                # ).to(model.device)
+                # # left-pad aux inputs
+                # aux_inputs = torch.nn.utils.rnn.pad_sequence(
+                #     [a.squeeze() for a in aux_inputs],
+                #     batch_first=True,
+                #     padding_value=pad_token_id,
+                #     padding_side="left"
+                # ).to(model.device)
+
+                # Create SPA logits processor
+                tokenizer.pad_token_id = tokenizer.eos_token_id
+                main_inputs, aux_inputs, mask_token = spa_tokenize(
+                    prompt_with_anchors=prompts[0],
+                    tokenizer=tokenizer,
+                    global_anchors=[],
+                    device=model.device
+                )
+                anchor_processor = SPALogitsProcessor(
+                    aux_model=model,
+                    aux_input_ids=aux_inputs,
+                    strength=anchor_strength,
+                    modulated_by_prob=True,
+                    use_attention_mask=True,
+                    mask_token=mask_token,
+                    tokenizer=tokenizer
+                )
+
+                # Generate text with SPA
+                outputs = model.generate(
+                    input_ids=main_inputs,
+                    attention_mask=torch.ones_like(main_inputs),
+                    logits_processor=[anchor_processor],
+                    max_new_tokens=max_new_tokens,
+                    do_sample=False,
+                    return_dict_in_generate=True,
+                    output_scores=True,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
             else:
                 inputs = tokenizer(prompts, return_tensors="pt", truncation=True, padding=True).to(model.device)
                 outputs = model.generate(**inputs, 
@@ -256,13 +324,14 @@ def counterfact_evaluate(
                     max_new_tokens=max_new_tokens,
                     pad_token_id=tokenizer.eos_token_id,
                 )
-                
+
             batched_results: dict = {}
             first_token_logps = torch.log_softmax(outputs.scores[0], dim=-1)
             top_logps, top_token_ids = first_token_logps.topk(k=n_top, dim=-1)
             top_tokens = [tokenizer.convert_ids_to_tokens(ids) for ids in top_token_ids]
             generations = tokenizer.batch_decode(outputs.sequences, skip_special_tokens=True)
 
+            batched_results["counterfact_prompt"] = prompts
             batched_results[f"top_logps"] = top_logps.tolist()
             batched_results[f"top_tokens"] = top_tokens
             batched_results[f"generations"] = [[g] for g in generations]
@@ -274,6 +343,7 @@ def counterfact_evaluate(
                 if return_unmediated:
                     target_keys.append("unmediated")
                 # batch_indices = torch.arange(current_batch_size)
+
                 for target_key in target_keys:
                     target_id = batch[f"target_{target_key}.token_id"].to(model.device)
                     target_probs = first_token_logps.gather(dim=1, index=target_id) # shape: (3, batch_size)
@@ -359,6 +429,8 @@ def counterfact_efficacy(
     chat: bool = False,
     seka: bool = False,
     pasta: PASTA | None = None,
+    anchor: bool = False,
+    anchor_strength: float = 20.0,
 ):
     if desc is None:
         desc = "efficacy benchmark"
@@ -383,7 +455,9 @@ def counterfact_efficacy(
         marker_end=marker_end,
         chat=chat,
         seka=seka,
-        pasta=pasta
+        pasta=pasta,
+        anchor=anchor,
+        anchor_strength=anchor_strength,
     )
     
     target_score_key = "target_mediated_score"
@@ -392,7 +466,7 @@ def counterfact_efficacy(
     samples = []
     for result in run.results:
         sid = result.sample["id"]
-        prompt = result.sample["prompt"]
+        prompt = result.counterfact_prompt
 
         target_score = getattr(result, target_score_key)
         assert target_score is not None
@@ -404,6 +478,7 @@ def counterfact_efficacy(
         sample = EfficacySample(
             id=sid,
             prompt=prompt,
+            generation=result.generations[0],
             target_score=target_score,
             comparator_score=comparator_score,
         )
