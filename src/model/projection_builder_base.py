@@ -31,8 +31,11 @@ class ProjectionBuilderBase(abc.ABC):
         self.model_path = model_path
         self.top_pct = top_pct
         self.feature = feature
-        with open(self.data_path) as f:
-            self.max_samples = min(max_samples, len(f.readlines()))
+        try:
+            with open(self.data_path) as f:
+                self.max_samples = min(max_samples, len(f.readlines()))
+        except:
+            self.max_samples = max_samples
         self.min_diff = min_diff
         self.chat = chat
         self.device = device
@@ -211,7 +214,13 @@ class ProjectionBuilderBase(abc.ABC):
         start = low.index(sub_low)
         end = start + len(sub_low)
         enc = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
-        return [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= end]
+        span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= end]
+        if len(span_indices) == 0:
+            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= (start-1) and e <= end]
+        if len(span_indices) == 0:
+            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= (end+1)]
+
+        return span_indices
 
     @staticmethod
     def extract_keys(model, tokenizer, text: str, indices: list[int], layers: list[int], feature: str) -> list[
