@@ -1,4 +1,3 @@
-# src/model/projection_builder_base.py
 from __future__ import annotations
 import abc, argparse, json, pathlib, torch
 import os
@@ -11,26 +10,22 @@ import numpy as np
 import matplotlib.pyplot as plt
 import warnings
 import matplotlib as mpl
-
 warnings.filterwarnings("ignore")
 
 torch.set_grad_enabled(False)
 
-
 class ProjectionBuilderBase(abc.ABC):
     def __init__(
-            self,
-            model_path: str,
-            data_path: str,
-            layers: str,
-            top_pct: float,
-            feature: str | None,
-            max_samples: int,
-            min_diff: float,
-            chat: bool = False,
-            device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-            save_svd: bool = False,  # NEW: whether to save SVD components
-            save_traditional: bool = True,  # NEW: whether to save traditional projections
+        self,
+        model_path: str,
+        data_path: str,
+        layers: str,
+        top_pct: float,
+        feature: str | None,
+        max_samples: int,
+        min_diff: float,
+        chat: bool = False,
+        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
     ):
         self.data_path = data_path
         self.model_path = model_path
@@ -44,8 +39,6 @@ class ProjectionBuilderBase(abc.ABC):
         self.min_diff = min_diff
         self.chat = chat
         self.device = device
-        self.save_svd = save_svd
-        self.save_traditional = save_traditional
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, max_length=9000)
         self.model = (
@@ -70,10 +63,11 @@ class ProjectionBuilderBase(abc.ABC):
     def run(self, output_dir):
         # 1) buffers per layer, per head
         num_layers = len(self.layers)
-        n_kv = self.model.config.num_key_value_heads if "gemma3" not in self.model.__class__.__name__.lower() else self.model.config.text_config.num_key_value_heads
-        buf_H = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
-        buf_Hp = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
-        buf_Hn = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
+        # import pdb; pdb.set_trace()
+        n_kv       = self.model.config.num_key_value_heads if "gemma3" not in self.model.__class__.__name__.lower() else self.model.config.text_config.num_key_value_heads
+        buf_H   = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
+        buf_Hp  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
+        buf_Hn  = [[[] for _ in range(n_kv)] for _ in range(num_layers)]
 
         pbar = tqdm(total=self.max_samples, desc="Extracting Keys", unit="ex")
         count = 0
@@ -81,35 +75,31 @@ class ProjectionBuilderBase(abc.ABC):
             for ctx, rel_q, ans, irr_q in self.get_triplets(ex):
                 # assemble texts
                 if self.chat:
-                    text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": f"Context: {ctx}"}],
-                                                                tokenize=False)
-                    text_Hp = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
-                    text_Hn = self.tokenizer.apply_chat_template(
-                        [{"role": "user", "content": f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
+                    text_H = self.tokenizer.apply_chat_template([{"role":"user","content":f"Context: {ctx}"}], tokenize=False)
+                    text_Hp= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+                    text_Hn= self.tokenizer.apply_chat_template([{"role":"user","content":f"Question: {irr_q}\nContext: {ctx}"}], tokenize=False)
                 else:
                     text_H, text_Hp, text_Hn = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}", f"Question: {irr_q}\nContext: {ctx}"
 
                 # find answer token indices
-                idx_H = self.span_token_indices(self.tokenizer, text_H, ans)
+                idx_H  = self.span_token_indices(self.tokenizer, text_H,  ans)
                 idx_Hp = self.span_token_indices(self.tokenizer, text_Hp, ans)
                 idx_Hn = self.span_token_indices(self.tokenizer, text_Hn, ans)
+
+                assert len(idx_H) == len(idx_Hp) == len(idx_Hn), f"Indices mismatch: {len(idx_H)}, {len(idx_Hp)}, {len(idx_Hn)}"
 
                 if not (idx_H and idx_Hp and idx_Hn):
                     continue
 
-                assert len(idx_H) == len(idx_Hp) == len(
-                    idx_Hn), f"Indices mismatch: {len(idx_H)}, {len(idx_Hp)}, {len(idx_Hn)}"
-
                 # extract keys: flat list of length num_layers*n_kv
-                keys_H = self.extract_keys(self.model, self.tokenizer, text_H, idx_H, self.layers, self.feature)
+                keys_H  = self.extract_keys(self.model, self.tokenizer, text_H,  idx_H,  self.layers, self.feature)
                 keys_Hp = self.extract_keys(self.model, self.tokenizer, text_Hp, idx_Hp, self.layers, self.feature)
                 keys_Hn = self.extract_keys(self.model, self.tokenizer, text_Hn, idx_Hn, self.layers, self.feature)
 
                 # distribute into buffers
                 for idx_flat, (k_H, k_Hp, k_Hn) in enumerate(zip(keys_H, keys_Hp, keys_Hn)):
                     L = idx_flat // n_kv
-                    h = idx_flat % n_kv
+                    h = idx_flat %  n_kv
                     buf_H[L][h].append(k_H)
                     buf_Hp[L][h].append(k_Hp)
                     buf_Hn[L][h].append(k_Hn)
@@ -121,127 +111,28 @@ class ProjectionBuilderBase(abc.ABC):
                 break
         pbar.close()
 
-        # 2) Determine what to compute and save
-        if self.save_svd:
-            self._compute_and_save_svd(buf_H, buf_Hp, buf_Hn, num_layers, n_kv, output_dir)
-
-        if self.save_traditional:
-            self._compute_and_save_traditional(buf_H, buf_Hp, buf_Hn, num_layers, n_kv, output_dir)
-
-    def _compute_and_save_svd(self, buf_H, buf_Hp, buf_Hn, num_layers, n_kv, output_dir):
-        """Compute and save SVD components (U matrices and singular values)"""
-        pos_U_list, pos_S_list = [], []
-        neg_U_list, neg_S_list = [], []
-        applied, skipped = [], []
-
-        for L in tqdm(range(num_layers), desc="Computing SVD Components", unit="layer"):
-            Up_heads, Sp_heads = [], []
-            Un_heads, Sn_heads = [], []
-
-            for h in range(n_kv):
-                H_mat = torch.cat(buf_H[L][h], 0).double().to(self.device)
-                Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
-                Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
-
-                # cross-cov → SVD
-                Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
-                Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
-
-                try:
-                    Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
-                    Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
-                except Exception as e:
-                    print(f"SVD failed for layer {L}, head {h}: {e}")
-                    # Fallback for problematic matrices
-                    d = Omega_p.shape[0]
-                    Up = torch.eye(d, device=self.device, dtype=torch.float)
-                    Sp = torch.ones(d, device=self.device, dtype=torch.float)
-                    Un = torch.eye(d, device=self.device, dtype=torch.float)
-                    Sn = torch.ones(d, device=self.device, dtype=torch.float)
-
-                norm_value = (torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)).item()
-
-                # decide whether to apply or skip
-                if norm_value < self.min_diff:
-                    skipped.append((self.layers[L], h, norm_value))
-                    # Use zero matrices for skipped heads
-                    Up = torch.zeros_like(Up)
-                    Sp = torch.zeros_like(Sp)
-                    Un = torch.zeros_like(Un)
-                    Sn = torch.zeros_like(Sn)
-                else:
-                    applied.append((self.layers[L], h, norm_value))
-
-                Up_heads.append(Up.to(torch.float))
-                Sp_heads.append(Sp.to(torch.float))
-                Un_heads.append(Un.to(torch.float))
-                Sn_heads.append(Sn.to(torch.float))
-
-            pos_U_list.append(torch.stack(Up_heads, dim=0))  # (H, d, d)
-            pos_S_list.append(torch.stack(Sp_heads, dim=0))  # (H, d)
-            neg_U_list.append(torch.stack(Un_heads, dim=0))  # (H, d, d)
-            neg_S_list.append(torch.stack(Sn_heads, dim=0))  # (H, d)
-
-        # stack layers → (num_layers, H, d, d) and (num_layers, H, d)
-        pos_U = torch.stack(pos_U_list, dim=0)
-        pos_S = torch.stack(pos_S_list, dim=0)
-        neg_U = torch.stack(neg_U_list, dim=0)
-        neg_S = torch.stack(neg_S_list, dim=0)
-
-        # save SVD components
-        os.makedirs(output_dir, exist_ok=True)
-        model_name = self.model_path.split('/')[-1]
-
-        # Save positive SVD components
-        pos_svd_data = {
-            'layers': self.layers,
-            'U_matrices': pos_U.cpu(),
-            'singular_values': pos_S.cpu()
-        }
-        pos_filename = f"{model_name}_pos_svd.pt"
-        if self.feature:
-            pos_filename = f"{model_name}_pos_svd_{self.feature}.pt"
-        torch.save(pos_svd_data, os.path.join(output_dir, pos_filename))
-
-        # Save negative SVD components
-        neg_svd_data = {
-            'layers': self.layers,
-            'U_matrices': neg_U.cpu(),
-            'singular_values': neg_S.cpu()
-        }
-        neg_filename = f"{model_name}_neg_svd.pt"
-        if self.feature:
-            neg_filename = f"{model_name}_neg_svd_{self.feature}.pt"
-        torch.save(neg_svd_data, os.path.join(output_dir, neg_filename))
-
-        # summary
-        print(f"\nSVD Components Summary:")
-        if applied:
-            print(f" ✔ Applied SVD: {len(applied)}")
-        if skipped:
-            print(f" ✖ Skipped (zero): {len(skipped)}")
-
-        print(f"Saved positive SVD to {output_dir}, U: {tuple(pos_U.shape)}, S: {tuple(pos_S.shape)}")
-        print(f"Saved negative SVD to {output_dir}, U: {tuple(neg_U.shape)}, S: {tuple(neg_S.shape)}")
-        print(f"Files: {pos_filename}, {neg_filename}")
-
-    def _compute_and_save_traditional(self, buf_H, buf_Hp, buf_Hn, num_layers, n_kv, output_dir):
-        """Compute and save traditional projection matrices"""
+        # 2) compute per-layer, per-head projectors
         pos_list, neg_list = [], []
         applied, skipped = [], []
+        all_pos_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
+        all_neg_keys = {L: {h: [] for h in range(n_kv)} for L in range(num_layers)}
         norm_diffs = np.zeros((num_layers, n_kv))
 
-        for L in tqdm(range(num_layers), desc="Computing Traditional Projectors", unit="layer"):
+        for L in tqdm(range(num_layers), desc="Computing Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
             for h in range(n_kv):
-                H_mat = torch.cat(buf_H[L][h], 0).double().to(self.device)
+                H_mat  = torch.cat(buf_H[L][h],  0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
                 Hn_mat = torch.cat(buf_Hn[L][h], 0).double().to(self.device)
+
+                # Store positive and negative embeddings
+                all_pos_keys[L][h].append(Hp_mat.cpu().detach().numpy())
+                all_neg_keys[L][h].append(Hn_mat.cpu().detach().numpy())
 
                 # neutral PCA → P0
                 C0 = (H_mat.T @ H_mat) / H_mat.size(0)
                 U0, S0, _ = torch.linalg.svd(C0.float(), full_matrices=False)
-                k0 = (S0.cumsum(0) / S0.sum() < self.top_pct).sum().item() + 1
+                k0 = (S0.cumsum(0)/S0.sum() < self.top_pct).sum().item() + 1
                 P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float)
 
                 # cross-cov → Pp, Pn
@@ -249,8 +140,8 @@ class ProjectionBuilderBase(abc.ABC):
                 Omega_n = (H_mat.T @ Hn_mat) / H_mat.size(0)
                 Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
                 Un, Sn, _ = torch.linalg.svd(Omega_n.float(), full_matrices=False)
-                kp = (Sp.cumsum(0) / Sp.sum() < self.top_pct).sum().item() + 1
-                kn = (Sn.cumsum(0) / Sn.sum() < self.top_pct).sum().item() + 1
+                kp = (Sp.cumsum(0)/Sp.sum() < self.top_pct).sum().item() + 1
+                kn = (Sn.cumsum(0)/Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
 
@@ -259,9 +150,12 @@ class ProjectionBuilderBase(abc.ABC):
 
                 # decide
                 if norm_value < self.min_diff:
+                    # Pp = torch.eye(Pp.size(0), dtype=Pp.dtype, device=Pp.device)
+                    # Pn = torch.eye(Pn.size(0), dtype=Pn.dtype, device=Pn.device)
                     skipped.append((self.layers[L], h, norm_value))
                     Pp = torch.zeros_like(Pp, dtype=Pp.dtype, device=Pp.device)
-                    Pn = torch.zeros_like(Pn, dtype=Pn.dtype, device=Pn.device)
+                    Pn = torch.zeros_like(Pn, dtype=Pp.dtype, device=Pp.device)
+
                 else:
                     applied.append((self.layers[L], h, norm_value))
 
@@ -277,24 +171,40 @@ class ProjectionBuilderBase(abc.ABC):
 
         # save
         os.makedirs(output_dir, exist_ok=True)
-        model_name = self.model_path.split('/')[-1]
+
 
         torch.save({'layers': self.layers, 'proj': pos_proj.cpu()}, os.path.join(output_dir,
-                                                                                 f"{model_name}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
-            output_dir, f"{model_name}_pos_proj.pt"))
+                         f"{self.model_path.split('/')[-1]}_pos_proj_{self.feature}.pt") if self.feature else os.path.join(
+                output_dir, f"{self.model_path.split('/')[-1]}_pos_proj.pt"))
         torch.save({'layers': self.layers, 'proj': neg_proj.cpu()}, os.path.join(output_dir,
-                                                                                 f"{model_name}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(
-            output_dir, f"{model_name}_neg_proj.pt"))
+                         f"{self.model_path.split('/')[-1]}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(
+                output_dir, f"{self.model_path.split('/')[-1]}_neg_proj.pt"))
 
         # summary
-        print(f"\nTraditional Projection Summary:")
+        print("\nProjection Summary:")
         if applied:
             print(f" ✔ Applied projection: {len(applied)}")
+            # for L, h, diff in applied:
+            #     print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
         if skipped:
             print(f" ✖ Skipped (identity): {len(skipped)}")
+            # for L, h, diff in skipped:
+            #     print(f"    • Layer {L}, Head {h}, Diff {diff:.2f}")
 
         print(f"Saved positive projectors to {output_dir}, {tuple(pos_proj.shape)}")
         print(f"Saved negative projectors to {output_dir}, {tuple(neg_proj.shape)}")
+
+        # Convert to numpy arrays
+        # all_pos_keys = {L: {h: np.concatenate(all_pos_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
+        # all_neg_keys = {L: {h: np.concatenate(all_neg_keys[L][h], axis=0) for h in range(n_kv)} for L in
+        #                 range(num_layers)}
+
+        # Visualize using PCA
+        # self.visualize_key_shift(all_pos_keys, all_neg_keys, os.path.join(output_dir, f"kde_plot_{self.model_path.split('/')[-1]}"))
+
+        # visualise the head norm differences
+        # self.plot_norm_heatmap(norm_diffs, self.model_path, self.layers, output_dir)
 
     @staticmethod
     def span_token_indices(tokenizer, text: str, sub: str) -> list[int] | None:
@@ -306,9 +216,9 @@ class ProjectionBuilderBase(abc.ABC):
         enc = tokenizer(text, return_offsets_mapping=True, add_special_tokens=False)
         span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= end]
         if len(span_indices) == 0:
-            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= (start - 1) and e <= end]
+            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= (start-1) and e <= end]
         if len(span_indices) == 0:
-            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= (end + 1)]
+            span_indices = [i for i, (s, e) in enumerate(enc.offset_mapping) if s >= start and e <= (end+1)]
 
         return span_indices
 
@@ -321,8 +231,7 @@ class ProjectionBuilderBase(abc.ABC):
         result: list[torch.Tensor] = []
         for L in layers:
             h_in = hiddens[L]
-            attn = model.model.layers[L].self_attn if "gemma3" not in model.__class__.__name__.lower() else \
-            model.language_model.model.layers[L].self_attn
+            attn = model.model.layers[L].self_attn if "gemma3" not in model.__class__.__name__.lower() else model.language_model.model.layers[L].self_attn
 
             if "qwen3" in model.__class__.__name__.lower():
                 h_in = model.model.layers[L].input_layernorm(h_in)
@@ -353,10 +262,9 @@ class ProjectionBuilderBase(abc.ABC):
             else:
                 raise NotImplementedError(f"Unsupported model type: {model.__class__.__name__}.")
 
-            # check if k contains nan
+            # check if k contains nan\
             if torch.isnan(k).any():
-                import pdb;
-                pdb.set_trace()
+                import pdb; pdb.set_trace()
                 raise ValueError("k contains NaN values")
 
             k = phi(k.float(), feature).to(torch.float)
@@ -368,6 +276,7 @@ class ProjectionBuilderBase(abc.ABC):
 
         return result
 
+
     def visualize_key_shift(self, pos_keys, neg_keys, output_dir):
         mpl.rcParams['font.family'] = 'serif'
         mpl.rcParams['font.serif'] = ['Times New Roman']
@@ -377,7 +286,7 @@ class ProjectionBuilderBase(abc.ABC):
         os.makedirs(output_dir, exist_ok=True)
 
         for L in tqdm(range(num_layers), desc="Visualizing Layers", unit="layer"):
-            layer_dir = os.path.join(output_dir, f"Layer_{L + 1}")
+            layer_dir = os.path.join(output_dir, f"Layer_{L+1}")
             os.makedirs(layer_dir, exist_ok=True)
 
             for h in range(n_kv):
@@ -410,7 +319,7 @@ class ProjectionBuilderBase(abc.ABC):
                            angles='xy', scale_units='xy', scale=1, width=0.0032,
                            headwidth=6, headlength=8, alpha=0.6, color='grey')  # Thicker quiver
 
-                plt.arrow(mean_start[0], mean_start[1], 2 * mean_dx, 2 * mean_dy,
+                plt.arrow(mean_start[0], mean_start[1], 2*mean_dx, 2*mean_dy,
                           head_width=0.8, head_length=0.8, color='#003366', linewidth=3.0,  # Bolder dark blue
                           length_includes_head=True, label='Mean shift')
 
@@ -421,7 +330,7 @@ class ProjectionBuilderBase(abc.ABC):
                 plt.yticks([])
                 plt.legend(loc='upper right', fontsize=24, frameon=False)
                 plt.tight_layout()
-                plt.savefig(os.path.join(layer_dir, f"Layer_{L + 1}_Head_{h + 1}_pca_pairwise_shift.pdf"), dpi=300)
+                plt.savefig(os.path.join(layer_dir, f"Layer_{L+1}_Head_{h+1}_pca_pairwise_shift.pdf"), dpi=300)
                 plt.close()
 
     @staticmethod
@@ -442,13 +351,11 @@ class ProjectionBuilderBase(abc.ABC):
 
         plt.xlabel("Layer", fontsize=44)
         plt.ylabel("Head", fontsize=44)
-        model_name = model_path.split('/')[-1] if (
-                    "chat" in model_path.split('/')[-1].lower() or "base" in model_path.split('/')[
-                -1].lower()) else f"{model_path.split('/')[-1]}-Base"
+        model_name = model_path.split('/')[-1] if ("chat" in model_path.split('/')[-1].lower() or "base" in model_path.split('/')[-1].lower()) else f"{model_path.split('/')[-1]}-Base"
         torch.save(norm_diffs, os.path.join(output_dir, f"norm_diffs_{model_name}.pt"))
         plt.title(model_name, fontsize=50, pad=14)
-        plt.xticks(np.arange(data.shape[1]), [str(int(l) + 1) for l in layers], fontsize=32)
-        plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0]) + 1, fontsize=32)
+        plt.xticks(np.arange(data.shape[1]), [str(int(l)+1) for l in layers], fontsize=32)
+        plt.yticks(np.arange(data.shape[0]), np.arange(data.shape[0])+1, fontsize=32)
 
         cbar = plt.colorbar(im, fraction=0.025, pad=0.02, aspect=40)
         cbar.set_label('Norm Value', fontsize=40)
@@ -458,3 +365,4 @@ class ProjectionBuilderBase(abc.ABC):
         os.makedirs(output_dir, exist_ok=True)
         plt.savefig(os.path.join(output_dir, f"hp_hn_norm_heatmap_{model_path.split('/')[-1]}.pdf"))
         plt.close()
+
