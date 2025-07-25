@@ -6,7 +6,7 @@ import numpy as np
 from functools import partial
 from pathlib import Path
 
-from anchoring import spa_tokenize, SPALogitsProcessor
+# from anchoring import spa_tokenize, SPALogitsProcessor
 from tqdm import tqdm
 from dataclasses import dataclass
 from dataclasses_json import DataClassJsonMixin
