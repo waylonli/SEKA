@@ -36,16 +36,16 @@ class CounterfactQABuilder(ProjectionBuilderBase):
         self.example_subset = example_subset
         self.benchmark_name = benchmark_name
         
-    def assemble_texts(self, ctx: str, rel_q: str):
-        if self.chat:
-            text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": ctx}],
-                                                        tokenize=False)
-            text_Hp = self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": rel_q}], tokenize=False)
-        else:
-            text_H, text_Hp = ctx, rel_q
-        import pdb; pdb.set_trace()
-        return text_H, text_Hp
+    # def assemble_texts(self, ctx: str, rel_q: str):
+    #     if self.chat:
+    #         text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": f"Context: {ctx}"}],
+    #                                                     tokenize=False)
+    #         text_Hp = self.tokenizer.apply_chat_template(
+    #             [{"role": "user", "content": f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+    #     else:
+    #         text_H, text_Hp = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}"
+
+    #     return text_H, text_Hp
     
     def iter_examples(self):
         # load dataset
@@ -80,10 +80,11 @@ class CounterfactQABuilder(ProjectionBuilderBase):
             target_mediated = batch["target_mediated"][0]
             target_unmediated = batch["target_unmediated"][0]
 
-            unmediated_fact = context.replace(target_mediated, target_unmediated)            
-            question = prompt[len(context)+1:].strip()
-
-            yield {"context_1": context, "question_1": prompt, "answer_1": target_mediated}
+            unmediated_fact = context.replace(target_mediated, target_unmediated)
+            question = prompt[len(context)+1:].strip() + "?"
+            full_context = f"Previously, {unmediated_fact}. Currently, {context}."
+            
+            yield {"context_1": full_context, "question_1": question, "answer_1": target_mediated}
 
         
     def get_triplets(self, ex: dict) -> list[tuple[str, str, str]]:        

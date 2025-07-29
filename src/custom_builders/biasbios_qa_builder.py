@@ -34,17 +34,16 @@ class BiasBiosQABuilder(ProjectionBuilderBase):
         super().__init__(model_path, data_path, layers, top_pct, feature, max_samples, min_diff, chat, device, save_svd, save_traditional)
         self.example_subset = example_subset
         
-    def assemble_texts(self, ctx: str, rel_q: str):
-        rel_q = rel_q.replace(ctx, "").strip() + " ?"
-        if self.chat:
-            text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": ctx}],
-                                                        tokenize=False)
-            text_Hp = self.tokenizer.apply_chat_template(
-                [{"role": "user", "content": rel_q}], tokenize=False)
-        else:
-            text_H, text_Hp = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}"
+    # def assemble_texts(self, ctx: str, rel_q: str):
+    #     if self.chat:
+    #         text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": f"Context: {ctx}"}],
+    #                                                     tokenize=False)
+    #         text_Hp = self.tokenizer.apply_chat_template(
+    #             [{"role": "user", "content": f"Question: {rel_q}\nContext: {ctx}"}], tokenize=False)
+    #     else:
+    #         text_H, text_Hp = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}"
 
-        return text_H, text_Hp
+    #     return text_H, text_Hp
     
     def iter_examples(self):
         # load dataset
@@ -62,12 +61,13 @@ class BiasBiosQABuilder(ProjectionBuilderBase):
                 context = batch["context"][0]
                 target_mediated = batch["target_mediated"][0]
                 
-                question = prompt.split("\n\n")[-1].strip()
-                main_context = context.split(".")[0].strip() + "."
+                question = prompt[len(context):].strip() + "?"
+
+                yield {"context_1": context, "question_1": question, "answer_1": target_mediated}
                 
-                new_prompt = f"{main_context} {question}"
-                
-                yield {"context_1": main_context, "question_1": new_prompt, "answer_1": target_mediated}
+                # # short context
+                # main_context = context.split(".")[0].strip() + "."
+                # yield {"context_1": main_context, "question_1": question, "answer_1": target_mediated}
 
     def get_triplets(self, ex: dict) -> list[tuple[str, str, str]]:
         return [
