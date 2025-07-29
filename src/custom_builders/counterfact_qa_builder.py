@@ -44,7 +44,7 @@ class CounterfactQABuilder(ProjectionBuilderBase):
                 [{"role": "user", "content": rel_q}], tokenize=False)
         else:
             text_H, text_Hp = ctx, rel_q
-
+        import pdb; pdb.set_trace()
         return text_H, text_Hp
     
     def iter_examples(self):
@@ -84,24 +84,7 @@ class CounterfactQABuilder(ProjectionBuilderBase):
             question = prompt[len(context)+1:].strip()
 
             yield {"context_1": context, "question_1": prompt, "answer_1": target_mediated}
-            # yield {"unmediated_fact": unmediated_fact, "context": context, "question": question, "answer": target_mediated}
 
-    # def get_triplets(self, ex: dict) -> list[tuple[str, str, str]]:
-    #     unmediated_fact = ex["unmediated_fact"]
-    #     context = ex["context"]
-    #     question = ex["question"]
-    #     answer = ex["answer"]
-        
-    #     cxt_1 = f"Previously {unmediated_fact}. Currently {context}."
-    #     cxt_2 = f"Currently {context}. Previously {unmediated_fact}."
-        
-    #     prompt_1 = f"{cxt_1} {question}"
-    #     prompt_2 = f"{cxt_2} {question}"
-        
-    #     return [
-    #         (cxt_1, prompt_1, answer),
-    #         (cxt_2, prompt_2, answer)
-    #     ]
         
     def get_triplets(self, ex: dict) -> list[tuple[str, str, str]]:        
         return [

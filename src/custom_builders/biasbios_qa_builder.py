@@ -35,13 +35,14 @@ class BiasBiosQABuilder(ProjectionBuilderBase):
         self.example_subset = example_subset
         
     def assemble_texts(self, ctx: str, rel_q: str):
+        rel_q = rel_q.replace(ctx, "").strip() + " ?"
         if self.chat:
             text_H = self.tokenizer.apply_chat_template([{"role": "user", "content": ctx}],
                                                         tokenize=False)
             text_Hp = self.tokenizer.apply_chat_template(
                 [{"role": "user", "content": rel_q}], tokenize=False)
         else:
-            text_H, text_Hp = ctx, rel_q
+            text_H, text_Hp = f"Context: {ctx} ", f"Question: {rel_q}\nContext: {ctx}"
 
         return text_H, text_Hp
     
@@ -95,9 +96,9 @@ if __name__ == '__main__':
                         help='Percentage of variance to retain in SVD')
     parser.add_argument('--feature', type=str, default=None,
                         help='Feature function to apply (tanh, elu, squared-exponential)')
-    parser.add_argument('--max_samples', type=int, default=1000,
+    parser.add_argument('--max_samples', type=int, default=200,
                         help='Maximum number of samples to process')
-    parser.add_argument('--min_diff', type=float, default=2.0,
+    parser.add_argument('--min_diff', type=float, default=0.2,
                         help='Minimum norm difference threshold for applying projection')
     parser.add_argument('--chat', action='store_true',
                         help='Apply chat template to prompts')

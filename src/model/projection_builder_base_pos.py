@@ -177,9 +177,9 @@ class ProjectionBuilderBase(abc.ABC):
             'U_matrices': pos_U.cpu(),
             'singular_values': pos_S.cpu()
         }
-        pos_filename = f"{model_name}_pos_svd.pt"
+        pos_filename = f"{model_name}_{self.min_diff}mindiff_pos_svd.pt"
         if self.feature:
-            pos_filename = f"{model_name}_pos_svd_{self.feature}.pt"
+            pos_filename = f"{model_name}_{self.min_diff}mindiff_pos_svd_{self.feature}.pt"
         torch.save(pos_svd_data, os.path.join(output_dir, pos_filename))
 
         # summary
@@ -204,14 +204,9 @@ class ProjectionBuilderBase(abc.ABC):
                 H_mat = torch.cat(buf_H[L][h], 0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
 
-                # neutral PCA → P0
-                C0 = (H_mat.T @ H_mat) / H_mat.size(0)
-                U0, S0, _ = torch.linalg.svd(C0.float(), full_matrices=False)
-                k0 = (S0.cumsum(0) / S0.sum() < self.top_pct).sum().item() + 1
-                P0 = (U0[:, :k0] @ U0[:, :k0].T).to(torch.float)
-
                 # cross-cov → Pp, Pn
                 Omega_p = (H_mat.T @ Hp_mat) / H_mat.size(0)
+
                 Up, Sp, _ = torch.linalg.svd(Omega_p.float(), full_matrices=False)
                 kp = (Sp.cumsum(0) / Sp.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
