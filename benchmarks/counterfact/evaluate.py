@@ -6,7 +6,7 @@ import numpy as np
 from functools import partial
 from pathlib import Path
 
-# from anchoring import spa_tokenize, SPALogitsProcessor
+from anchoring import spa_tokenize, SPALogitsProcessor
 from tqdm import tqdm
 from dataclasses import dataclass
 from dataclasses_json import DataClassJsonMixin
@@ -251,36 +251,6 @@ def counterfact_evaluate(
                         output_attentions=True,
                     )
             elif anchor:
-                # main_inputs = []
-                # aux_inputs = []
-                # mask_token = []
-                # for prompt in prompts:
-                #     main_inputs_one_prompt, aux_inputs_one_prompt, mask_token_one_prompt = spa_tokenize(
-                #         prompt_with_anchors=prompt,
-                #         tokenizer=tokenizer,
-                #         global_anchors=[],
-                #         device=model.device
-                #     )
-                #     main_inputs.append(main_inputs_one_prompt)
-                #     aux_inputs.append(aux_inputs_one_prompt)
-                #     mask_token.append(mask_token_one_prompt)
-                # import pdb; pdb.set_trace()
-                # # add left padding to main inputs and aux inputs
-                # pad_token_id = tokenizer.eos_token_id
-                # # left-pad main inputs
-                # main_inputs = torch.nn.utils.rnn.pad_sequence(
-                #     [m.squeeze() for m in main_inputs],
-                #     batch_first=True,
-                #     padding_value=pad_token_id,
-                #     padding_side="left"
-                # ).to(model.device)
-                # # left-pad aux inputs
-                # aux_inputs = torch.nn.utils.rnn.pad_sequence(
-                #     [a.squeeze() for a in aux_inputs],
-                #     batch_first=True,
-                #     padding_value=pad_token_id,
-                #     padding_side="left"
-                # ).to(model.device)
 
                 # Create SPA logits processor
                 tokenizer.pad_token_id = tokenizer.eos_token_id
@@ -294,7 +264,7 @@ def counterfact_evaluate(
                     aux_model=model,
                     aux_input_ids=aux_inputs,
                     strength=anchor_strength,
-                    modulated_by_prob=True,
+                    modulated_by_prob=False,
                     use_attention_mask=True,
                     mask_token=mask_token,
                     tokenizer=tokenizer
@@ -531,6 +501,8 @@ def counterfact_paraphrase(
     chat: bool = False,
     seka: bool = False,
     pasta: PASTA | None = None,
+    anchor: bool = False,
+    anchor_strength: float = 20.0,
 ):
     """Run the CounterFact paraphrase benchmark.
 
@@ -577,6 +549,8 @@ def counterfact_paraphrase(
         chat=chat,
         seka=seka,
         pasta=pasta,
+        anchor=anchor,
+        anchor_strength=anchor_strength,
     )
 
     results_by_sample_id: dict = defaultdict(list)
