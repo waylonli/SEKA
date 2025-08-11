@@ -20,7 +20,7 @@ from benchmarks.utils.pasta_utils import (
 )
 from benchmarks.utils.typing_uils import Dataset
 
-from src.model import SEKALLM
+from src.model import SEKALLM, AdaptiveSEKALLM
 from src.utils import encode_with_markers
 from pastalib.pasta import PASTA
 
@@ -125,7 +125,7 @@ def load_biasbios_tfidf_vectorizer(data_path: str) -> TfidfVectorizer:
 
 @torch.inference_mode()
 def biasbios_prediction_evaluation(
-    model: PreTrainedModel | SEKALLM,
+    model: PreTrainedModel | SEKALLM | AdaptiveSEKALLM,
     tokenizer: PreTrainedTokenizer,
     dataset: Dataset,
     data_path: str,
@@ -389,7 +389,7 @@ def biasbios_prediction_evaluation(
 
 @torch.inference_mode()
 def biasbios_instruction_evaluation(
-    model: PreTrainedModel,
+    model: PreTrainedModel | SEKALLM | AdaptiveSEKALLM,
     tokenizer: PreTrainedTokenizer,
     dataset: Dataset,
     data_path: str,

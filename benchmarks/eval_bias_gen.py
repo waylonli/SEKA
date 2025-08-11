@@ -10,7 +10,7 @@ from benchmarks.biasbios.preprocess import load_dataset
 from benchmarks.biasbios.evaluate import biasbios_prediction_evaluation
 from benchmarks.utils.pasta_utils import setup_logger
 
-from src.model import SEKALLM
+from src.model import SEKALLM, AdaptiveSEKALLM
 from pastalib.pasta import PASTA, read_head_config
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,30 @@ def main(args: argparse.Namespace):
         # Force add_marker flag to be True
         if not args.add_marker:
             logger.warning("SEKA LLM requires markers, setting add_marker to True.")
+            args.add_marker = True
+    elif args.adaptive_seka:
+        if args.adaptive_expert_path is None:
+            raise ValueError("Adaptive SEKA requires an adaptive expert path.")
+
+        expert_path = json.load(open(args.adaptive_expert_path, "r"))
+        
+        model = AdaptiveSEKALLM(
+            args.model,
+            expert_paths=expert_path,
+            marker_start=args.marker_start,
+            marker_end=args.marker_end,
+            layers=args.layers,
+            top_k_singular=args.top_k_singular,
+            combination_method=args.combination_method,
+            amplify_factor=args.adaptive_amplify_factor,
+            device="auto",
+        )
+            
+        tokenizer = model.tok
+        
+        # Force add_marker flag to be True
+        if not args.add_marker:
+            logger.warning("Adaptive SEKA LLM requires markers, setting add_marker to True.")
             args.add_marker = True
     elif args.anchor:
         model = transformers.AutoModelForCausalLM.from_pretrained(
@@ -106,7 +130,7 @@ def main(args: argparse.Namespace):
             add_marker=args.add_marker,
             marker_start=args.marker_start,
             marker_end=args.marker_end,
-            seka=args.seka,
+            seka=args.seka or args.adaptive_seka,
             pasta=pasta,
             anchor=args.anchor,
             anchor_strength=args.anchor_strength,
@@ -179,6 +203,12 @@ if __name__ == "__main__":
     parser.add_argument('--layers', default='last10',
                 help="'all' / 'last4' / '0,4,19' …")
     
+    parser.add_argument("--adaptive-seka", action="store_true", default=False, help="Use adaptive SEKA model")
+    parser.add_argument("--adaptive-expert-path", type=str, default=None, help="Path to adaptive expert file")
+    parser.add_argument("--adaptive_amplify_factor", type=float, default=1.0, help="Amplification factor for adaptive SEKA")
+    parser.add_argument("--top_k_singular", type=int, default=5, help="Top k singular values for adaptive SEKA")
+    parser.add_argument("--combination_method", type=str, default="weighted_top_k", choices=["weighted_top_k", "all_weighted", "top_k_uniform"], help="Combination method for adaptive SEKA")
+    
     parser.add_argument("--pasta", action="store_true", default=False, help="Use PASTA model")
     parser.add_argument("--head_config", type=str, default=None, help="PASTA head config for steering")
     parser.add_argument("--pasta_alpha", type=float, default=None, help="Scaling coefficient")
@@ -188,5 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--anchor_strength", type=float, default=1.6, help="Anchor strength for steering")
     
     args = parser.parse_args()
+
+    assert not (args.seka and args.adaptive_seka), "Cannot use both SEKA and adaptive SEKA at the same time."
 
     main(args)
