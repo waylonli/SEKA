@@ -12,13 +12,15 @@ class TaskSpecificProjector:
     based on query-singular vector alignment.
     """
 
-    def __init__(self, expert_svd_data: dict, device: str = "cuda"):
+    def __init__(self, expert_svd_data: dict, device: str = "cuda", multi_gpu: bool = False):
         """
         Args:
             expert_svd_data: Dict mapping expert names to (layers_info, U_matrices, singular_values)
             device: Device to place tensors on
+            multi_gpu: Whether model is using multi-GPU setup
         """
         self.device = device
+        self.multi_gpu = multi_gpu
         self.expert_names = list(expert_svd_data.keys())
         self.num_experts = len(self.expert_names)
 
@@ -27,13 +29,26 @@ class TaskSpecificProjector:
         self.expert_singular_values = {}
 
         for expert_name, (layers_info, U_matrices, singular_values) in expert_svd_data.items():
-            self.expert_U_matrices[expert_name] = U_matrices.to(device)
-            self.expert_singular_values[expert_name] = singular_values.to(device)
+            # Keep matrices on CPU for multi-GPU to avoid memory issues, move to device as needed
+            if multi_gpu:
+                self.expert_U_matrices[expert_name] = U_matrices.cpu()
+                self.expert_singular_values[expert_name] = singular_values.cpu()
+            else:
+                self.expert_U_matrices[expert_name] = U_matrices.to(device)
+                self.expert_singular_values[expert_name] = singular_values.to(device)
 
         # Get dimensions from first expert
         first_expert = self.expert_names[0]
         L, H, d, _ = self.expert_U_matrices[first_expert].shape
         self.num_layers, self.num_heads, self.head_dim = L, H, d
+
+    def get_layer_device(self, query_device: torch.device) -> torch.device:
+        """Get the appropriate device for matrix operations, considering multi-GPU setup."""
+        if self.multi_gpu:
+            # Use the same device as the query tensor for consistency
+            return query_device
+        else:
+            return self.device
 
     def compute_dynamic_coefficients(self, query: torch.Tensor, layer_idx: int, head_idx: int,
                                      top_k: int = None,
@@ -59,6 +74,7 @@ class TaskSpecificProjector:
 
         # Normalize query
         query_norm = query / (torch.norm(query) + 1e-8)
+        target_device = self.get_layer_device(query.device)
 
         coefficients = []
 
@@ -66,6 +82,11 @@ class TaskSpecificProjector:
             # Get U matrix and singular values for this expert, layer, and head
             U = self.expert_U_matrices[expert_name][layer_idx, head_idx]  # (d, d)
             S = self.expert_singular_values[expert_name][layer_idx, head_idx]  # (d,)
+            
+            # Move to target device if needed (for multi-GPU)
+            if U.device != target_device:
+                U = U.to(target_device)
+                S = S.to(target_device)
 
             # Skip invalid/NaN matrices (heads that didn't meet min_diff threshold)
             if torch.isnan(U).any() or torch.isnan(S).any():
@@ -113,8 +134,8 @@ class TaskSpecificProjector:
 
         # Debug coefficient values
         if torch.isnan(coefficients).any() or torch.isinf(coefficients).any():
-            print(f"Warning: Invalid coefficients detected at layer {layer_idx}, head {head_idx}")
-            print(f"Raw coefficients before softmax: {torch.stack([torch.sum(c) for c in coefficients])}")
+            # print(f"Warning: Invalid coefficients detected at layer {layer_idx}, head {head_idx}")
+            # print(f"Raw coefficients before softmax: {torch.stack([torch.sum(c) for c in coefficients])}")
             coefficients = torch.ones(self.num_experts, device=coefficients.device) / self.num_experts
 
         return coefficients
@@ -139,10 +160,15 @@ class TaskSpecificProjector:
             query, layer_idx, head_idx, top_k, combination_method
         )
 
-        dynamic_proj = torch.zeros(self.head_dim, self.head_dim, device=self.device, dtype=torch.float32)
+        target_device = self.get_layer_device(query.device)
+        dynamic_proj = torch.zeros(self.head_dim, self.head_dim, device=target_device, dtype=torch.float32)
 
         for i, expert_name in enumerate(self.expert_names):
             U = self.expert_U_matrices[expert_name][layer_idx, head_idx]  # (d, d)
+            
+            # Move to target device if needed (for multi-GPU)
+            if U.device != target_device:
+                U = U.to(target_device)
             
             # Skip invalid/NaN matrices 
             if torch.isnan(U).any():
@@ -188,11 +214,18 @@ class AdaptiveSEKALLM:
         self.tok: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_or_path, padding_side="left", **hf_kwargs)
 
         if multi_gpu:
+            print(f"Initializing AdaptiveSEKA with {torch.cuda.device_count()} GPUs")
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path, device_map="auto", **hf_kwargs).eval()
+            self.multi_gpu = True
+            # For multi-GPU, use the device of the first layer for expert matrices  
+            self.expert_device = next(self.model.parameters()).device
+            print(f"Expert matrices will be managed with base device: {self.expert_device}")
         else:
             self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(
                 model_or_path, **hf_kwargs).to(device).eval()
+            self.multi_gpu = False
+            self.expert_device = device
 
         self.m_start, self.m_end = marker_start, (marker_start if marker_end is None else marker_end)
         self.layers = layers
@@ -206,10 +239,10 @@ class AdaptiveSEKALLM:
 
         expert_svd_data = {}
         for expert_name, expert_path in expert_paths.items():
-            layers_info, U_matrices, singular_values = self._load_svd_data(expert_path, device)
+            layers_info, U_matrices, singular_values = self._load_svd_data(expert_path, self.expert_device)
             expert_svd_data[expert_name] = (layers_info, U_matrices, singular_values)
 
-        self.task_projector = TaskSpecificProjector(expert_svd_data, device)
+        self.task_projector = TaskSpecificProjector(expert_svd_data, self.expert_device, multi_gpu=self.multi_gpu)
         self._hooks: list[torch.utils.hooks.RemovableHandle] = []
 
         n_layers = len(self.model.model.layers) if "gemma3" not in self.model.__class__.__name__.lower() else len(
@@ -218,7 +251,22 @@ class AdaptiveSEKALLM:
 
     @property
     def device(self):
-        return self.model.device
+        if self.multi_gpu:
+            # For multi-GPU, return the device of the first parameter
+            return next(self.model.parameters()).device
+        else:
+            return self.model.device
+    
+    def get_layer_device(self, layer_idx: int) -> torch.device:
+        """Get the device where a specific layer is located."""
+        if self.multi_gpu:
+            if "gemma3" not in self.model.__class__.__name__.lower():
+                layer = self.model.model.layers[layer_idx]
+            else:
+                layer = self.model.language_model.model.layers[layer_idx]
+            return next(layer.parameters()).device
+        else:
+            return self.device
 
     def _load_svd_data(self, path: str, device):
         obj = torch.load(path, map_location=device)
@@ -355,7 +403,11 @@ class AdaptiveSEKALLM:
         amplify_factor = self.amplify_factor if amplify_factor is None else amplify_factor
         
         first_dev = self.device
-        m_dev = (steer_mask_tensor.unsqueeze(0) if steer_mask_tensor.dim() == 1 else steer_mask_tensor).to(first_dev) if steer_mask_tensor is not None else None
+        # For multi-GPU, we'll handle device placement per layer
+        if steer_mask_tensor is not None:
+            m_dev = steer_mask_tensor.unsqueeze(0) if steer_mask_tensor.dim() == 1 else steer_mask_tensor
+        else:
+            m_dev = None
         
         root = self.model.module if hasattr(self.model, "module") else self.model
         
@@ -377,7 +429,12 @@ class AdaptiveSEKALLM:
                         dynamic_proj = self.task_projector.get_dynamic_projection(
                             query_for_head, i, h, self.top_k_singular, self.combination_method
                         )
-                        layer_dynamic_projections[(i, h)] = dynamic_proj.to(first_dev)
+                        # Store projection on the same device as the layer it will be applied to
+                        if self.multi_gpu:
+                            layer_device = self.get_layer_device(actual_layer)
+                            layer_dynamic_projections[(i, h)] = dynamic_proj.to(layer_device)
+                        else:
+                            layer_dynamic_projections[(i, h)] = dynamic_proj
 
                 except Exception as e:
                     print(f"Warning: Failed to pre-compute projections for layer {actual_layer}: {e}")
@@ -411,7 +468,9 @@ class AdaptiveSEKALLM:
                     if dynamic_proj is None:
                         continue # Skip if pre-computation failed
 
-                    dynamic_proj = dynamic_proj.to(k_feat.device)
+                    # Ensure projection is on the same device as key features
+                    if dynamic_proj.device != k_feat.device:
+                        dynamic_proj = dynamic_proj.to(k_feat.device)
 
                     for b in range(B):
                         mask_b = m[b]
@@ -428,7 +487,11 @@ class AdaptiveSEKALLM:
             self._hooks.append(mod.register_forward_hook(_adaptive_hook))
 
         if not silence:
-            print(f"✅ Adaptive steering hooks attached on layers {self.sel_layers}")
+            if self.multi_gpu:
+                print(f"✅ Adaptive steering hooks attached on layers {self.sel_layers} (Multi-GPU)")
+                print(f"   Projections distributed across devices for optimal performance")
+            else:
+                print(f"✅ Adaptive steering hooks attached on layers {self.sel_layers}")
 
     def remove_projection(self):
         for h in self._hooks: h.remove()
@@ -444,8 +507,15 @@ class AdaptiveSEKALLM:
             outputs = self.model(input_ids=input_ids, output_hidden_states=True, use_cache=False)
             
             print("=== Coefficient Statistics ===")
+            if self.multi_gpu:
+                print("Multi-GPU setup detected - device placement:")
+            
             for i, actual_layer in enumerate(self.sel_layers):
                 hidden_states = outputs.hidden_states[actual_layer + 1]
+                if self.multi_gpu:
+                    layer_device = self.get_layer_device(actual_layer)
+                    print(f"Layer {actual_layer} on device: {layer_device}")
+                
                 queries = self._get_queries_from_steered_tokens(hidden_states, actual_layer, steer_mask_tensor)
                 
                 for h in range(self.task_projector.num_heads):
