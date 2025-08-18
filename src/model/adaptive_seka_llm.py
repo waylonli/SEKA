@@ -52,7 +52,8 @@ class TaskSpecificProjector:
 
     def compute_dynamic_coefficients(self, query: torch.Tensor, layer_idx: int, head_idx: int,
                                      top_k: int = None,
-                                     combination_method: str = "weighted_top_k") -> torch.Tensor:
+                                     combination_method: str = "weighted_top_k",
+                                     temperature: float = 1.0) -> torch.Tensor:
         """
         Compute dynamic coefficients for expert combination based on query alignment.
 
@@ -65,6 +66,7 @@ class TaskSpecificProjector:
                 - "weighted_top_k": Use top-k singular vectors weighted by singular values
                 - "all_weighted": Use all singular vectors weighted by singular values
                 - "top_k_uniform": Use top-k singular vectors with uniform weighting
+            temperature: Temperature for scaling similarities (higher = softer, lower = sharper)
 
         Returns:
             Dynamic coefficients for each expert (num_experts,)
@@ -72,7 +74,7 @@ class TaskSpecificProjector:
         if query.dim() == 2:
             query = query.squeeze(0)  # (d,)
 
-        # Normalize query
+        # Normalize query for cosine similarity computation
         query_norm = query / (torch.norm(query) + 1e-8)
         target_device = self.get_layer_device(query.device)
 
@@ -82,7 +84,9 @@ class TaskSpecificProjector:
             # Get U matrix and singular values for this expert, layer, and head
             U = self.expert_U_matrices[expert_name][layer_idx, head_idx]  # (d, d)
             S = self.expert_singular_values[expert_name][layer_idx, head_idx]  # (d,)
-            
+
+            # Don't normalize U (already orthonormal from SVD) or S (encodes component importance)
+
             # Move to target device if needed (for multi-GPU)
             if U.device != target_device:
                 U = U.to(target_device)
@@ -105,14 +109,23 @@ class TaskSpecificProjector:
                 top_U = U[:, :k]  # (d, k) - top k singular vectors
                 top_S = S[:k]  # (k,) - top k singular values
 
-                # Compute alignment: q^T * U * S
+                # normalise top_S
+                # top_S = top_S / (torch.norm(top_S) + 1e-8)  # Normalize to avoid scaling issues
+
+                # Compute alignment: q^T * U * S (with optional temperature scaling)
                 alignments = torch.matmul(query_norm, top_U)  # (k,)
+                if temperature != 1.0:
+                    alignments = alignments / temperature  # Temperature scaling
                 weighted_alignments = alignments * top_S  # (k,)
                 coefficient = torch.sum(weighted_alignments)  # scalar
+                # print(expert_name)
+                # import pdb; pdb.set_trace()
 
             elif combination_method == "all_weighted":
                 # Use all singular vectors weighted by singular values
                 alignments = torch.matmul(query_norm, U)  # (d,)
+                if temperature != 1.0:
+                    alignments = alignments / temperature  # Temperature scaling
                 weighted_alignments = alignments * S  # (d,)
                 coefficient = torch.sum(weighted_alignments)  # scalar
 
@@ -120,6 +133,8 @@ class TaskSpecificProjector:
                 # Use top-k singular vectors with uniform weighting
                 top_U = U[:, :k]  # (d, k)
                 alignments = torch.matmul(query_norm, top_U)  # (k,)
+                if temperature != 1.0:
+                    alignments = alignments / temperature  # Temperature scaling
                 coefficient = torch.mean(alignments)  # scalar
 
             else:
@@ -129,8 +144,10 @@ class TaskSpecificProjector:
 
         coefficients = torch.stack(coefficients)  # (num_experts,)
         
-        # Use softmax for probabilistic mixing instead of L2 normalization
-        coefficients = torch.softmax(coefficients, dim=0)
+
+        abs_sum = torch.sum(torch.abs(coefficients))
+        abs_max = torch.max(torch.abs(coefficients))
+        coefficients /= (abs_max + 1e-8)
 
         # Debug coefficient values
         if torch.isnan(coefficients).any() or torch.isinf(coefficients).any():
@@ -138,10 +155,15 @@ class TaskSpecificProjector:
             # print(f"Raw coefficients before softmax: {torch.stack([torch.sum(c) for c in coefficients])}")
             coefficients = torch.ones(self.num_experts, device=coefficients.device) / self.num_experts
 
+        # if nonzero coefficients, use them
+        # if coefficients.nonzero().size(0) > 0 and not torch.isnan(self.expert_U_matrices[expert_name][layer_idx, head_idx]).any():
+        #     print(coefficients)
+
         return coefficients
 
     def get_dynamic_projection(self, query: torch.Tensor, layer_idx: int, head_idx: int,
-                               top_k: int = 3, combination_method: str = "weighted_top_k") -> torch.Tensor:
+                               top_k: int = 3, combination_method: str = "weighted_top_k",
+                               temperature: float = 1.0) -> torch.Tensor:
         """
         Get query-adaptive projection matrix: P_dyn = sum(α_m * P_m)
         where P_m = U_m @ U_m^T (reconstruct projection from stored U matrices)
@@ -152,12 +174,13 @@ class TaskSpecificProjector:
             head_idx: Head index
             top_k: Number of top singular vectors to use
             combination_method: How to combine singular vectors and values
+            temperature: Temperature for scaling similarities
 
         Returns:
             Dynamic projection matrix (d, d)
         """
         coefficients = self.compute_dynamic_coefficients(
-            query, layer_idx, head_idx, top_k, combination_method
+            query, layer_idx, head_idx, top_k, combination_method, temperature
         )
 
         target_device = self.get_layer_device(query.device)
@@ -201,6 +224,7 @@ class AdaptiveSEKALLM:
                  feature_function: str | None = None,
                  top_k_singular: int = 3,
                  combination_method: str = "weighted_top_k",
+                 temperature: float = 1.0,
                  **hf_kwargs
                  ):
         if device == "auto":
@@ -233,6 +257,7 @@ class AdaptiveSEKALLM:
         self.feature_function = feature_function
         self.top_k_singular = top_k_singular
         self.combination_method = combination_method
+        self.temperature = temperature
 
         if expert_paths is None:
             raise ValueError("expert_paths must be provided for adaptive SEKA")
@@ -354,18 +379,12 @@ class AdaptiveSEKALLM:
 
         return generated[0] if len(generated) == 1 else generated
 
-    def _get_queries_from_steered_tokens(self, hidden_states: torch.Tensor, layer_idx: int, 
-                                        steer_mask: torch.Tensor) -> torch.Tensor:
-        """Extract queries from tokens that will be steered, not just last token."""
-        # Get indices of tokens that will be steered
-        steer_indices = torch.where(steer_mask[0])[0]  # Assuming batch size 1
-        
-        if len(steer_indices) == 0:
-            # Fallback to last token if no steered tokens
-            steer_indices = torch.tensor([hidden_states.shape[1] - 1], device=hidden_states.device)
-        
-        # Use the first steered token for routing (could also average multiple)
-        token_hidden = hidden_states[0, steer_indices[0], :]
+    def _get_queries_from_last_token(self, hidden_states: torch.Tensor, layer_idx: int, 
+                                     steer_mask: torch.Tensor) -> torch.Tensor:
+        """Extract queries from the last token in the prompt for coefficient computation."""
+        # Always use the last token for routing/coefficient computation
+        last_token_idx = hidden_states.shape[1] - 1
+        token_hidden = hidden_states[0, last_token_idx, :]
 
         if "gemma3" not in self.model.__class__.__name__.lower():
             attn_layer = self.model.model.layers[layer_idx].self_attn
@@ -376,7 +395,7 @@ class AdaptiveSEKALLM:
         
         normalized_hidden = layernorm(token_hidden.unsqueeze(0).unsqueeze(0))[0, 0, :]
         q_proj = attn_layer.q_proj(normalized_hidden)
-        
+
         if "gemma3" in self.model.__class__.__name__.lower():
             num_q_heads = self.model.config.text_config.num_attention_heads
             head_dim = self.model.config.text_config.head_dim
@@ -384,7 +403,7 @@ class AdaptiveSEKALLM:
             num_q_heads = self.model.config.num_attention_heads
             head_dim = self.model.config.head_dim
 
-        q = q_proj.view(num_q_heads, head_dim)
+        q = attn_layer.q_norm(q_proj.view(num_q_heads, head_dim))
 
         num_kv_heads = self.task_projector.num_heads
         if num_q_heads != num_kv_heads:
@@ -422,12 +441,12 @@ class AdaptiveSEKALLM:
             for i, actual_layer in enumerate(self.sel_layers):
                 hidden_states = outputs.hidden_states[actual_layer + 1]
                 try:
-                    queries = self._get_queries_from_steered_tokens(hidden_states, actual_layer, steer_mask_tensor)
+                    queries = self._get_queries_from_last_token(hidden_states, actual_layer, steer_mask_tensor)
                     
                     for h in range(self.task_projector.num_heads):
                         query_for_head = queries[h, :]
                         dynamic_proj = self.task_projector.get_dynamic_projection(
-                            query_for_head, i, h, self.top_k_singular, self.combination_method
+                            query_for_head, i, h, self.top_k_singular, self.combination_method, self.temperature
                         )
                         # Store projection on the same device as the layer it will be applied to
                         if self.multi_gpu:
@@ -452,17 +471,24 @@ class AdaptiveSEKALLM:
                                amp_factor=amplify_factor,
                                precomputed_projs=layer_dynamic_projections):
 
+                need_transpose = False
                 if k_in.dim() == 4: B, T, H, D = k_in.shape; k_view = k_in
                 elif k_in.dim() == 3: B, T, D_all = k_in.shape; H, D = self.task_projector.num_heads, self.task_projector.head_dim; k_view = k_in.view(B, T, H, D)
                 else: raise ValueError(f"Unsupported k_in shape: {k_in.shape}")
 
                 if m is None or m.sum() == 0: return k_in
 
+                if m.shape != (B, T):
+                    if m.shape == (B, H):
+                        # transpose k_in to [B, T, H, D]
+                        k_view = k_view.transpose(1, 2)  # (B, H, T, D)
+                        need_transpose = True
+                    else:
+                        return k_in  # no steering if mask shape is unexpected
+
                 k_feat = phi(k_view, self.feature_function)
                 
                 for h in range(H):
-                    if m.shape[1] != T: continue
-                    
                     # --- OPTIMIZATION: Use pre-computed projection ---
                     dynamic_proj = precomputed_projs.get((layer_idx, h))
                     if dynamic_proj is None:
@@ -482,7 +508,11 @@ class AdaptiveSEKALLM:
                             delta = torch.matmul(dynamic_proj, k_sel.T).T
                             k_feat[b, mask_b, h, :] += amp_factor * delta
 
-                return k_feat.contiguous().view(B, T, H * D) if k_in.dim() == 3 else k_feat
+                k_out = k_feat.contiguous().view(B, T, H * D) if k_in.dim() == 3 else k_feat
+                if need_transpose:
+                    k_out = k_out.transpose(1, 2)
+                
+                return k_out
 
             self._hooks.append(mod.register_forward_hook(_adaptive_hook))
 
@@ -500,6 +530,7 @@ class AdaptiveSEKALLM:
     def set_amplify_factor(self, factor: float): self.amplify_factor = factor
     def set_combination_method(self, method: str): self.combination_method = method
     def set_top_k_singular(self, k: int): self.top_k_singular = k
+    def set_temperature(self, temp: float): self.temperature = temp
     
     def debug_coefficient_statistics(self, input_ids: torch.Tensor, steer_mask_tensor: torch.Tensor):
         """Print coefficient statistics for debugging routing behavior."""
@@ -516,12 +547,12 @@ class AdaptiveSEKALLM:
                     layer_device = self.get_layer_device(actual_layer)
                     print(f"Layer {actual_layer} on device: {layer_device}")
                 
-                queries = self._get_queries_from_steered_tokens(hidden_states, actual_layer, steer_mask_tensor)
+                queries = self._get_queries_from_last_token(hidden_states, actual_layer, steer_mask_tensor)
                 
                 for h in range(self.task_projector.num_heads):
                     query_for_head = queries[h, :]
                     coefficients = self.task_projector.compute_dynamic_coefficients(
-                        query_for_head, i, h, self.top_k_singular, self.combination_method
+                        query_for_head, i, h, self.top_k_singular, self.combination_method, self.temperature
                     )
                     print(f"Layer {actual_layer}, Head {h}: {[f'{self.task_projector.expert_names[j]}={coefficients[j]:.3f}' for j in range(len(coefficients))]}")
             print("==========================")
