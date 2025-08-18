@@ -5,7 +5,7 @@ import subprocess
 import matplotlib.pyplot as plt
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.model import SEKALLM
+from src.model import SEKALLM, AdaptiveSEKALLM
 from src.utils import encode_with_markers
 from pastalib.pasta import PASTA, read_head_config
 import json
@@ -82,6 +82,20 @@ def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, bat
             )
             # out is a list of decoded strings
             decoded = out if isinstance(out, list) else [out]
+        elif mode == "adaptive_seka":
+            ids, steer_mask, attention_mask = encode_with_markers(chunk, tokenizer)
+            ids, steer_mask, attention_mask = ids.to(model.device), steer_mask.to(model.device), attention_mask.to(model.device)
+            out = model.generate(
+                ids=ids,
+                steer_mask=steer_mask,
+                attention_mask=attention_mask,
+                max_new_tokens=max_new_tokens,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id
+            )
+            decoded = out if isinstance(out, list) else [out]
+        else:
+            raise ValueError(f"Unknown model mode: {mode}")
 
 
         batch_time = time.perf_counter() - batch_start
@@ -151,6 +165,8 @@ prompts, highlighted_contexts = zip(*(make_prompt_and_highlight(ex) for ex in ex
 
 # --- Model settings (update these) ---
 MODEL_ID = "./pretrained/Qwen3-8B-Base"
+# --- AdaSEKA ---
+ADASEKA_EXPERT_CONFIG = "adaptive-seka-config/Qwen3-4B/Qwen3-4B-mindiff-0.4.json"
 # --- SEKA ---
 SEKA_POS = "projections/speed_memory/Qwen3-8B-Base_pos_proj.pt"
 SEKA_NEG = "projections/speed_memory/Qwen3-8B-Base_neg_proj.pt"
@@ -195,7 +211,23 @@ def get_model_seka():
     )
     return seka_model, "seka"
 
+# Adaptive SEKA function
+def get_model_adaptive_seka():
+    adaptive_seka_model = AdaptiveSEKALLM(
+        MODEL_ID,
+        expert_paths=ADASEKA_EXPERT_CONFIG,
+        layers=SEKA_LAYERS,
+        top_k_singular=5,
+        combination_method="weighted_top_k",
+        amplify_factor=1.0,
+        attn_implementation="sdpa",
+        torch_dtype=torch.bfloat16,
+    )
+    return adaptive_seka_model, "adaptive_seka"
+
 # --- Run all three ---
+print("\n--- ADAPTIVE SEKA ---")
+df_adaptive_seka, _ = run_benchmark("adaptive_seka", get_model_adaptive_seka, tokenizer, prompts, highlighted_contexts)
 print("\n--- SEKA ---")
 df_seka, _ = run_benchmark("seka", get_model_seka, tokenizer, prompts, highlighted_contexts)
 print("\n--- PASTA ---")

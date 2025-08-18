@@ -222,7 +222,7 @@ class AdaptiveSEKALLM:
                  layers: str = "last10",
                  amplify_factor: float = 1.0,
                  feature_function: str | None = None,
-                 top_k_singular: int = 3,
+                 top_k_singular: int = 5,
                  combination_method: str = "weighted_top_k",
                  temperature: float = 1.0,
                  **hf_kwargs
