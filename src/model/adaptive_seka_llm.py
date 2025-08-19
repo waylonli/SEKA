@@ -184,7 +184,10 @@ class TaskSpecificProjector:
         )
 
         target_device = self.get_layer_device(query.device)
-        dynamic_proj = torch.zeros(self.head_dim, self.head_dim, device=target_device, dtype=torch.float32)
+        # Use the same dtype as the expert matrices
+        first_expert = self.expert_names[0]
+        expert_dtype = self.expert_U_matrices[first_expert].dtype
+        dynamic_proj = torch.zeros(self.head_dim, self.head_dim, device=target_device, dtype=expert_dtype)
 
         for i, expert_name in enumerate(self.expert_names):
             U = self.expert_U_matrices[expert_name][layer_idx, head_idx]  # (d, d)
@@ -222,7 +225,7 @@ class AdaptiveSEKALLM:
                  layers: str = "last10",
                  amplify_factor: float = 1.0,
                  feature_function: str | None = None,
-                 top_k_singular: int = 5,
+                 top_k_singular: int = 3,
                  combination_method: str = "weighted_top_k",
                  temperature: float = 1.0,
                  **hf_kwargs
@@ -262,9 +265,12 @@ class AdaptiveSEKALLM:
         if expert_paths is None:
             raise ValueError("expert_paths must be provided for adaptive SEKA")
 
+        # Get model's dtype for expert matrix compatibility
+        self.model_dtype = next(self.model.parameters()).dtype
+
         expert_svd_data = {}
         for expert_name, expert_path in expert_paths.items():
-            layers_info, U_matrices, singular_values = self._load_svd_data(expert_path, self.expert_device)
+            layers_info, U_matrices, singular_values = self._load_svd_data(expert_path, self.expert_device, self.model_dtype)
             expert_svd_data[expert_name] = (layers_info, U_matrices, singular_values)
 
         self.task_projector = TaskSpecificProjector(expert_svd_data, self.expert_device, multi_gpu=self.multi_gpu)
@@ -293,19 +299,19 @@ class AdaptiveSEKALLM:
         else:
             return self.device
 
-    def _load_svd_data(self, path: str, device):
+    def _load_svd_data(self, path: str, device, model_dtype: torch.dtype):
         obj = torch.load(path, map_location=device)
         if isinstance(obj, dict):
             layers = obj.get('layers', None)
             if 'U_matrices' in obj and 'singular_values' in obj:
-                U_matrices = obj['U_matrices'].to(device)
-                singular_values = obj['singular_values'].to(device)
+                U_matrices = obj['U_matrices'].to(device, dtype=model_dtype)
+                singular_values = obj['singular_values'].to(device, dtype=model_dtype)
             else:
-                proj = obj['proj'].to(device)
+                proj = obj['proj'].to(device, dtype=model_dtype)
                 U_matrices, singular_values = self._decompose_projections(proj)
         else:
             layers = None
-            proj = obj.to(device)
+            proj = obj.to(device, dtype=model_dtype)
             U_matrices, singular_values = self._decompose_projections(proj)
 
         if U_matrices.ndim == 2:
@@ -319,8 +325,8 @@ class AdaptiveSEKALLM:
 
     def _decompose_projections(self, projections: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         L, H, d, _ = projections.shape
-        U_matrices = torch.zeros(L, H, d, d, device=projections.device)
-        singular_values = torch.zeros(L, H, d, device=projections.device)
+        U_matrices = torch.zeros(L, H, d, d, device=projections.device, dtype=projections.dtype)
+        singular_values = torch.zeros(L, H, d, device=projections.device, dtype=projections.dtype)
         for l in range(L):
             for h in range(H):
                 proj = projections[l, h]
@@ -330,8 +336,8 @@ class AdaptiveSEKALLM:
                     singular_values[l, h] = S
                 except Exception as e:
                     print(f"SVD decomposition failed for layer {l}, head {h}: {e}")
-                    U_matrices[l, h] = torch.eye(d, device=projections.device)
-                    singular_values[l, h] = torch.ones(d, device=projections.device)
+                    U_matrices[l, h] = torch.eye(d, device=projections.device, dtype=projections.dtype)
+                    singular_values[l, h] = torch.ones(d, device=projections.device, dtype=projections.dtype)
         return U_matrices, singular_values
 
     def generate(self,

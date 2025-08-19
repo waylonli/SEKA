@@ -3,12 +3,13 @@ import os
 from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from src.model import SEKALLM
+from src.model import SEKALLM, AdaptiveSEKALLM
 import torch, string, regex
 from typing import List
 
 from src.utils import encode_with_markers
 from pastalib.pasta import PASTA, read_head_config
+from anchoring import spa_tokenize, SPALogitsProcessor
 
 # ────────── metric ───────────────────────────────────────────────────
 def normalize_answer(s: str) -> str:
@@ -75,10 +76,17 @@ def run(
         seka_amplify_pos,
         seka_amplify_neg,
         seka_layers,
+        adaptive_seka,
+        adaptive_expert_path,
+        top_k_singular,
+        combination_method,
+        adaptive_amplify_factor,
         apply_pasta,
         head_config,
         pasta_alpha,
         scale_position,
+        anchor,
+        anchor_strength,
         device,
         data_dir,
         chat,
@@ -90,20 +98,19 @@ def run(
 ):
     tok = AutoTokenizer.from_pretrained(model_id, padding_side="left")
 
-    if not apply_seka:
-        mod = AutoModelForCausalLM.from_pretrained(model_id,
-                                                       torch_dtype=torch.bfloat16
-                                                      ).to(device).eval()
-        if apply_pasta:
-            head_config = read_head_config(args.head_config)
-            pasta = PASTA(
-                mod,
-                tok,
-                head_config=head_config,
-                alpha=args.pasta_alpha,
-                scale_position=args.scale_position,
-            )
-    else:
+    if adaptive_seka:
+        adaptive_expert_path = json.load(open(adaptive_expert_path, "r"))
+        mod = AdaptiveSEKALLM(
+            model_id,
+            expert_paths=adaptive_expert_path,
+            layers=seka_layers,
+            top_k_singular=top_k_singular,
+            combination_method=combination_method,
+            amplify_factor=adaptive_amplify_factor,
+            attn_implementation="sdpa",
+            torch_dtype=torch.bfloat16
+        )
+    elif apply_seka:
         mod = SEKALLM(
             model_id,
             pos_pt=seka_pos,
@@ -114,6 +121,19 @@ def run(
             attn_implementation="sdpa",
             torch_dtype=torch.bfloat16
         )
+    else:
+        mod = AutoModelForCausalLM.from_pretrained(model_id,
+                                                       torch_dtype=torch.bfloat16
+                                                      ).to(device).eval()
+        if apply_pasta:
+            head_config = read_head_config(head_config)
+            pasta = PASTA(
+                mod,
+                tok,
+                head_config=head_config,
+                alpha=pasta_alpha,
+                scale_position=scale_position,
+            )
 
     base_dir   = Path("benchmarks/lost_in_the_middle")
     res_dir    = base_dir / "results" / exp_name
@@ -158,57 +178,7 @@ def run(
                     ids, steering_mask, attention_mask = encode_with_markers(prompts, tok)
                     ids, steering_mask, attention_mask = ids.to(device), steering_mask.to(device), attention_mask.to(device)
 
-                    if not apply_seka:
-                        if not apply_pasta:
-                            out = mod.generate(ids, attention_mask=attention_mask,
-                                               max_new_tokens=max_new_tokens,
-                                               do_sample=False,
-                                               pad_token_id=tok.eos_token_id)
-
-                            for j, ex in enumerate(chunk):
-                                gen_ids = out[j, ids.shape[-1]:]
-                                ans = tok.decode(gen_ids,
-                                                 skip_special_tokens=True).strip()
-                                ems.append(best_subspan_em(ans, ex["answers"]))
-                                pf.write(json.dumps({"id": start + j,
-                                                     "answer": ans,
-                                                     "gold": ex["answers"]},
-                                                    ensure_ascii=False) + "\n")
-                        else:
-                            prompts = ([tok.apply_chat_template(chat_prompt(e, hlt_full, False)[0], tokenize=False,
-                                                                enable_thinking=False)
-                                        for e in chunk] if chat
-                                       else [base_prompt(e, hlt_full, False)[0] for e in chunk])
-                            inputs = tok(
-                                prompts, return_tensors="pt",
-                                return_offsets_mapping=True,
-                                truncation=True, padding=True
-                            ).to(mod.device)
-                            offset_mapping = inputs.pop("offset_mapping")
-                            with pasta.apply_steering(
-                                    model=mod,
-                                    strings=prompts,
-                                    substrings=highlighted_contexts,
-                                    model_input=inputs,
-                                    offsets_mapping=offset_mapping
-                            ) as steered_model:
-                                out = steered_model.generate(
-                                    **inputs,
-                                    max_new_tokens=max_new_tokens,
-                                    pad_token_id=tok.eos_token_id,
-                                    do_sample=False,
-                                )
-
-                            for j, ex in enumerate(chunk):
-                                gen_ids = out[j, inputs["input_ids"].shape[-1]:]
-                                ans = tok.decode(gen_ids,
-                                                 skip_special_tokens=True).strip()
-                                ems.append(best_subspan_em(ans, ex["answers"]))
-                                pf.write(json.dumps({"id": start + j,
-                                                     "answer": ans,
-                                                     "gold": ex["answers"]},
-                                                    ensure_ascii=False) + "\n")
-                    else:
+                    if adaptive_seka:
                         out = mod.generate(
                             ids=ids,
                             steer_mask=steering_mask,
@@ -221,6 +191,116 @@ def run(
 
                         for j, ex in enumerate(chunk):
                             ans = out[j]
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
+
+                    elif apply_seka:
+                        out = mod.generate(
+                            ids=ids,
+                            steer_mask=steering_mask,
+                            attention_mask=attention_mask,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            temperature=0.0,
+                            pad_token_id=tok.eos_token_id
+                        )
+
+                        for j, ex in enumerate(chunk):
+                            ans = out[j]
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
+
+                    elif anchor:
+                        # Anchor uses individual prompt processing (batch_size must be 1)
+                        for j, ex in enumerate(chunk):
+                            prompt = prompts[j]
+                            
+                            # Create SPA logits processor
+                            tok.pad_token_id = tok.eos_token_id
+                            main_inputs, aux_inputs, mask_token = spa_tokenize(
+                                prompt_with_anchors=prompt,
+                                tokenizer=tok,
+                                global_anchors=[],
+                                device=device
+                            )
+                            anchor_processor = SPALogitsProcessor(
+                                aux_model=mod,
+                                aux_input_ids=aux_inputs,
+                                strength=anchor_strength,
+                                modulated_by_prob=False,
+                                use_attention_mask=True,
+                                mask_token=mask_token,
+                                tokenizer=tok
+                            )
+
+                            # Generate text with SPA
+                            out = mod.generate(
+                                input_ids=main_inputs,
+                                attention_mask=torch.ones_like(main_inputs),
+                                logits_processor=[anchor_processor],
+                                max_new_tokens=max_new_tokens,
+                                do_sample=False,
+                                pad_token_id=tok.eos_token_id,
+                            )
+                            
+                            gen_ids = out[0, main_inputs.shape[-1]:]
+                            ans = tok.decode(gen_ids, skip_special_tokens=True).strip()
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
+
+                    elif not apply_pasta:
+                        out = mod.generate(ids, attention_mask=attention_mask,
+                                           max_new_tokens=max_new_tokens,
+                                           do_sample=False,
+                                           pad_token_id=tok.eos_token_id)
+
+                        for j, ex in enumerate(chunk):
+                            gen_ids = out[j, ids.shape[-1]:]
+                            ans = tok.decode(gen_ids,
+                                             skip_special_tokens=True).strip()
+                            ems.append(best_subspan_em(ans, ex["answers"]))
+                            pf.write(json.dumps({"id": start + j,
+                                                 "answer": ans,
+                                                 "gold": ex["answers"]},
+                                                ensure_ascii=False) + "\n")
+                    else:
+                        prompts = ([tok.apply_chat_template(chat_prompt(e, hlt_full, False)[0], tokenize=False,
+                                                            enable_thinking=False)
+                                    for e in chunk] if chat
+                                   else [base_prompt(e, hlt_full, False)[0] for e in chunk])
+                        inputs = tok(
+                            prompts, return_tensors="pt",
+                            return_offsets_mapping=True,
+                            truncation=True, padding=True
+                        ).to(mod.device)
+                        offset_mapping = inputs.pop("offset_mapping")
+                        with pasta.apply_steering(
+                                model=mod,
+                                strings=prompts,
+                                substrings=highlighted_contexts,
+                                model_input=inputs,
+                                offsets_mapping=offset_mapping
+                        ) as steered_model:
+                            out = steered_model.generate(
+                                **inputs,
+                                max_new_tokens=max_new_tokens,
+                                pad_token_id=tok.eos_token_id,
+                                do_sample=False,
+                            )
+
+                        for j, ex in enumerate(chunk):
+                            gen_ids = out[j, inputs["input_ids"].shape[-1]:]
+                            ans = tok.decode(gen_ids,
+                                             skip_special_tokens=True).strip()
                             ems.append(best_subspan_em(ans, ex["answers"]))
                             pf.write(json.dumps({"id": start + j,
                                                  "answer": ans,
@@ -247,10 +327,17 @@ if __name__ == "__main__":
     p.add_argument("--seka-layers", required=False, default="last10")
     p.add_argument("--seka-amplify-pos", required=False, type=float)
     p.add_argument("--seka-amplify-neg", required=False, type=float)
+    p.add_argument("--adaptive-seka", action="store_true")
+    p.add_argument("--adaptive-expert-path", required=False, help="Path to adaptive SEKA expert config JSON")
+    p.add_argument("--top_k_singular", required=False, type=int, default=5, help="Top-k singular vectors")
+    p.add_argument("--combination_method", required=False, default="weighted_top_k", help="Combination method")
+    p.add_argument("--adaptive_amplify_factor", required=False, type=float, default=1.0, help="Amplify factor")
     p.add_argument("--apply-pasta", action="store_true")
     p.add_argument("--head_config", type=str, default=None, help="PASTA head config for steering")
     p.add_argument("--pasta_alpha", type=float, default=None, help="Scaling coefficient")
     p.add_argument("--scale_position", type=str, default=None, help="Steer the selected section or others")
+    p.add_argument("--anchor", action="store_true", help="Enable anchor-based steering")
+    p.add_argument("--anchor_strength", type=float, default=20.0, help="Anchor strength for SPA")
     p.add_argument("--chat", action="store_true")
     p.add_argument("--device", default="cuda:0")
     p.add_argument("--max-new-tokens", type=int, default=60)
