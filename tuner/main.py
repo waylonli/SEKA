@@ -447,7 +447,8 @@ def objective(
     if args.model_type == "seka":
         # Set SEKA params
         model.amplify_pos = get_param(trial, args, "amp_pos", log=False)
-        model.amplify_neg = get_param(trial, args, "amp_neg", log=False)
+        if args.use_proj_neg:
+            model.amplify_neg = get_param(trial, args, "amp_neg", log=False)
     elif args.model_type == "ada_seka":
         # Set AdaSEKA params
         model.amplify_factor = get_param(trial, args, "amp_factor", log=True)
