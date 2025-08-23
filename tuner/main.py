@@ -278,15 +278,21 @@ def load_task(
         )
         
         datasets.disable_caching()
-        dataset = load_dataset(
+        val_dataset = load_dataset(
             data_path=data_path,
             tokenizer=tokenizer,
             attribute_no_entity=False,
             example_subset=example_subset
         )
+        test_dataset = load_dataset(
+            data_path=data_path,
+            tokenizer=tokenizer,
+            attribute_no_entity=False,
+        )
         
         def eval_func(
             model,
+            dataset,
             batch_size,
             max_length,
             max_new_tokens,
@@ -327,14 +333,19 @@ def load_task(
         from benchmarks.biasbios.preprocess import load_dataset
         from benchmarks.biasbios.evaluate import biasbios_prediction_evaluation
         
-        dataset = load_dataset(
+        val_dataset = load_dataset(
             data_path, 
             attribute_no_entity=False,
             example_subset=example_subset
         )
+        test_dataset = load_dataset(
+            data_path=data_path,
+            attribute_no_entity=False,
+        )
         
         def eval_func(
             model,
+            dataset,
             batch_size,
             max_length,
             max_new_tokens,
@@ -364,14 +375,19 @@ def load_task(
         from benchmarks.biasbios.preprocess import load_dataset
         from benchmarks.biasbios.evaluate import biasbios_instruction_evaluation, BiosBiasInstructionEvaluationResults
         
-        dataset = load_dataset(
+        val_dataset = load_dataset(
             data_path=data_path,
             attribute_no_entity=False,
             example_subset=example_subset
         )
+        test_dataset = load_dataset(
+            data_path=data_path,
+            attribute_no_entity=False,
+        )
         
         def eval_func(
             model,
+            dataset,
             batch_size,
             max_length,
             max_new_tokens,
@@ -403,7 +419,7 @@ def load_task(
     else:
         raise ValueError(f"{task=} not found")
 
-    return eval_func, opt_directions
+    return eval_func, val_dataset, test_dataset, opt_directions
 
 
 def get_param(trial: optuna.Trial, args, name: str, log: bool = False):
@@ -422,6 +438,7 @@ def objective(
     builder, 
     eval_func,
     model,
+    dataset,
 ):
     # Set proj builder params
     builder.top_pct = get_param(trial, args, "top_pct", log=False)
@@ -429,8 +446,8 @@ def objective(
     
     if args.model_type == "seka":
         # Set SEKA params
-        model.amplify_pos = get_param(trial, args, "amp_pos", log=True)
-        model.amplify_neg = get_param(trial, args, "amp_neg", log=True)
+        model.amplify_pos = get_param(trial, args, "amp_pos", log=False)
+        model.amplify_neg = get_param(trial, args, "amp_neg", log=False)
     elif args.model_type == "ada_seka":
         # Set AdaSEKA params
         model.amplify_factor = get_param(trial, args, "amp_factor", log=True)
@@ -441,12 +458,41 @@ def objective(
     
     builder.run(args.proj_dir)
     return eval_func(
-        model,
-        args.batch_size,
-        args.max_length,
-        args.max_new_tokens,
-        args.chat
+        model=model,
+        dataset=dataset,
+        batch_size=args.batch_size,
+        max_length=args.max_length,
+        max_new_tokens=args.max_new_tokens,
+        chat=args.chat
     )
+    
+
+def test(builder, eval_func, model, dataset, best_params, args):
+    builder.top_pct = best_params.get("top_pct", args.fixed_top_pct)
+    builder.min_diff = best_params.get("min_diff", args.fixed_min_diff)
+    
+    if args.model_type == "seka":
+        # Set SEKA params
+        model.amplify_pos = best_params.get("amp_pos", args.fixed_amp_pos)
+        model.amplify_neg = best_params.get("amp_neg", args.fixed_amp_neg)
+    elif args.model_type == "ada_seka":
+        # Set AdaSEKA params
+        model.amplify_factor = best_params.get("amp_factor", args.fixed_amp_factor)
+    elif args.model_type == "varnorm_seka":
+        pass
+    else:
+        raise ValueError
+    
+    builder.run(args.proj_dir)
+    return eval_func(
+        model=model,
+        dataset=dataset,
+        batch_size=args.batch_size,
+        max_length=args.max_length,
+        max_new_tokens=args.max_new_tokens,
+        chat=args.chat
+    )
+    
 
 def main():
     args = parse_args()
@@ -470,14 +516,14 @@ def main():
         top_k_singular=args.top_k_singular,
         combination_method=args.combination_method
     )
-    eval_func, directions = load_task(
+    eval_func, val_dataset, test_dataset, opt_directions = load_task(
         task=args.task,
         data_path=args.eval_data_path,
         model=model,
         example_subset=args.eval_example_subset
     )
     
-    study = optuna.create_study(directions=directions)
+    study = optuna.create_study(directions=opt_directions)
     
     # Use a lambda function to pass the pre-loaded objects to the objective
     study.optimize(
@@ -487,6 +533,7 @@ def main():
             builder=builder, 
             eval_func=eval_func,
             model=model,
+            dataset=val_dataset, 
         ), 
         n_trials=args.n_trials
     )
@@ -498,6 +545,16 @@ def main():
         print("  Params: ")
         for key, value in trial.params.items():
             print(f"    {key}: {value}")
+        test_res = test(
+            builder=builder,
+            eval_func=eval_func,
+            model=model,
+            dataset=test_dataset,
+            best_params=trial.params,
+            args=args,
+        )
+        print("  Test Perf: ")
+        print(f"    {test_res}")
 
 
 if __name__ == "__main__":
