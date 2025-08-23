@@ -6,7 +6,7 @@ import datasets
 import transformers
 from pathlib import Path
 
-from src.model import SEKALLM, AdaptiveSEKALLM
+from src.model import SEKALLM, AdaptiveSEKALLM, VarReduceSEKALLM
 from pastalib.pasta import PASTA, read_head_config
 
 from benchmarks.counterfact.preprocess import load_dataset
@@ -47,6 +47,33 @@ def main(args: argparse.Namespace):
             layers=args.layers,
             amplify_pos=args.amplify_pos,
             amplify_neg=args.amplify_neg,
+            feature_function=feature_fn,
+            torch_dtype="auto",
+            device="auto"
+        )
+        tokenizer = model.tok
+            
+        # Force add_marker flag to be True
+        if not args.add_marker:
+            logger.warning("SEKA LLM requires markers, setting add_marker to True.")
+            args.add_marker = True
+    elif args.var_seka:
+        if "_tanh" in args.pos:
+            feature_fn = "tanh"
+        elif "_elu" in args.pos:
+            feature_fn = "elu"
+        elif "_squared" in args.pos:
+            feature_fn = "squared-exponential"
+        else:
+            feature_fn = None
+
+        model = VarReduceSEKALLM(
+            args.model,
+            pos_pt=args.pos,
+            marker_start=args.marker_start,
+            marker_end=args.marker_end,
+            layers=args.layers,
+            pos_lam=args.pos_lam,
             feature_function=feature_fn,
             torch_dtype="auto",
             device="auto"
@@ -151,7 +178,7 @@ def main(args: argparse.Namespace):
                 max_new_tokens=args.max_new_tokens,
                 add_unmediated_fact=args.add_unmediated_fact,
                 chat=args.chat,
-                seka=args.seka or args.adaptive_seka,
+                seka=args.seka or args.adaptive_seka or args.var_seka,
                 pasta=pasta,
                 anchor=args.anchor,
                 anchor_strength=args.anchor_strength,
@@ -169,7 +196,7 @@ def main(args: argparse.Namespace):
                 max_new_tokens=args.max_new_tokens,
                 add_unmediated_fact=args.add_unmediated_fact,
                 chat=args.chat,
-                seka=args.seka or args.adaptive_seka,
+                seka=args.seka or args.adaptive_seka or args.var_seka,
                 pasta=pasta,
                 anchor=args.anchor,
                 anchor_strength=args.anchor_strength,
@@ -192,7 +219,7 @@ def main(args: argparse.Namespace):
                 attribute_snippets=load_attribute_snippets(snippets_file),
                 tfidf_vectorizer=load_counterfact_tfidf_vectorizer(idf_file, vocab_file),
                 chat=args.chat,
-                seka=args.seka or args.adaptive_seka,
+                seka=args.seka or args.adaptive_seka or args.var_seka,
                 pasta=pasta,
                 add_marker=args.add_marker,
                 marker_start=args.marker_start,
@@ -289,6 +316,8 @@ if __name__ == "__main__":
     parser.add_argument("--top_k_singular", type=int, default=5, help="Top k singular values for adaptive SEKA")
     parser.add_argument("--combination_method", type=str, default="weighted_top_k", choices=["weighted_top_k", "all_weighted", "top_k_uniform"], help="Combination method for adaptive SEKA")
 
+    parser.add_argument("--var-seka", action="store_true", default=False, help="Use variance reduction SEKA model")
+    parser.add_argument('--pos_lam', type=str, default=None)
     
     parser.add_argument("--pasta", action="store_true", default=False, help="Use PASTA model")
     parser.add_argument("--head_config", type=str, default=None, help="PASTA head config for steering")

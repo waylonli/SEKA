@@ -4,7 +4,7 @@ import os
 import torch
 import numpy as np
 from tqdm import tqdm
-from src.model.projection_builder_base_old import ProjectionBuilderBase
+from src.model import ProjectionBuilderBase
 
 class RandomProjectionBuilder(ProjectionBuilderBase):
     def run(self, output_dir):
