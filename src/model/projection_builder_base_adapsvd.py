@@ -337,9 +337,9 @@ class ProjectionBuilderBase(abc.ABC):
             'U_matrices': pos_U.cpu(),
             'singular_values': pos_S.cpu()
         }
-        pos_filename = f"{model_name}_pos_svd.pt"
+        pos_filename = f"{model_name}_{self.min_diff}mindiff_pos_svd.pt"
         if self.feature:
-            pos_filename = f"{model_name}_pos_svd_{self.feature}.pt"
+            pos_filename = f"{model_name}_{self.min_diff}mindiff_pos_svd_{self.feature}.pt"
         torch.save(pos_svd_data, os.path.join(output_dir, pos_filename))
 
         # summary

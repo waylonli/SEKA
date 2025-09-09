@@ -29,15 +29,18 @@ def best_subspan_em(prediction: str, ground_truths: List[str]) -> float:
     return 0.0
 
 # ────────── prompt builders ──────────────────────────────────────────
-def chat_prompt(ex, hlt_full, add_marker=True):
+def chat_prompt(ex, hlt_full, add_marker=True, anchor_mode=False):
     if add_marker:
+        start_marker = "<anchor>" if anchor_mode else "**"
+        end_marker = "</anchor>" if anchor_mode else "**"
+        
         if not hlt_full:
             ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
-                  "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+                  "\n\n" + start_marker + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + end_marker + \
                   "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
             highlighted_ctxs = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25]))
         else:
-            ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
+            ctx = start_marker + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + end_marker
             highlighted_ctxs = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
     else:
         ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
@@ -48,15 +51,18 @@ def chat_prompt(ex, hlt_full, add_marker=True):
     )
     return [{"role": "user", "content": user}], highlighted_ctxs
 
-def base_prompt(ex, hlt_full, add_marker=True):
+def base_prompt(ex, hlt_full, add_marker=True, anchor_mode=False):
     if add_marker:
+        start_marker = "<anchor>" if anchor_mode else "**"
+        end_marker = "</anchor>" if anchor_mode else "**"
+        
         if not hlt_full:
             ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][:4])) + \
-                  "\n\n" + "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + "**" + \
+                  "\n\n" + start_marker + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25])) + end_marker + \
                   "\n\n" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][25:]))
             highlighted_ctxs = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"][4:25]))
         else:
-            ctx = "**" + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + "**"
+            ctx = start_marker + "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"])) + end_marker
             highlighted_ctxs = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
     else:
         ctx = "\n\n".join(f"{c['title']}\n{c['text']}" for i, c in enumerate(ex["ctxs"]))
@@ -217,14 +223,17 @@ def run(
                                                 ensure_ascii=False) + "\n")
 
                     elif anchor:
-                        # Anchor uses individual prompt processing (batch_size must be 1)
+                        # Anchor uses individual prompt processing with <anchor> markers
                         for j, ex in enumerate(chunk):
-                            prompt = prompts[j]
+                            # Create anchor-specific prompt
+                            anchor_prompt = ([tok.apply_chat_template(chat_prompt(ex, hlt_full, True, True)[0], tokenize=False, enable_thinking=False)
+                                             for ex in [ex]] if chat
+                                            else [base_prompt(ex, hlt_full, True, True)[0] for ex in [ex]])[0]
                             
                             # Create SPA logits processor
                             tok.pad_token_id = tok.eos_token_id
                             main_inputs, aux_inputs, mask_token = spa_tokenize(
-                                prompt_with_anchors=prompt,
+                                prompt_with_anchors=anchor_prompt,
                                 tokenizer=tok,
                                 global_anchors=[],
                                 device=device

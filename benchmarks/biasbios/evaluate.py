@@ -432,8 +432,6 @@ def biasbios_instruction_evaluation(
             `max_length`, see huggingface docs.
         device: Send model and data to this device.
         desc: TQDM description. 
-        add_few_shot: Whether to apply few-shot prompting. 
-        few_shot_index: Sample index for few shots. 
 
     Returns:
         Benchmark results.
@@ -517,7 +515,7 @@ def biasbios_instruction_evaluation(
                     pad_token_id=tokenizer.eos_token_id,
                 )
                 generations = tokenizer.batch_decode(
-                    outputs.sequences[:, input_ids.shape[1] :],
+                    outputs.sequences[:, input_ids.shape[1]:],
                     skip_special_tokens=True,
                 )
             elif pasta:
@@ -601,8 +599,8 @@ def biasbios_instruction_evaluation(
 
             distributions = torch.log_softmax(outputs.scores[0], dim=-1)
 
-            for idx, sid, prompt, distribution, generation, target, target_idx in zip(
-               range(len(ids)), ids, prompts, distributions, generations, targets, targets_idx
+            for idx, sid, prompt, distribution, generation, target, target_idx, context in zip(
+               range(len(ids)), ids, prompts, distributions, generations, targets, targets_idx, contexts
             ):
                 label_log_probs = distribution[labels_token_idx]
 
@@ -620,8 +618,8 @@ def biasbios_instruction_evaluation(
                 consistency_score = vector_similarity(
                     generation_tfidf.squeeze(), reference_tfidf.squeeze()
                 )
-
-                instruction_evaluation = evaluator.evaluate_sample(generation=generation, target=target)
+                
+                instruction_evaluation = evaluator.evaluate_sample(generation=generation, target=target, original_context=context)
 
                 sample = InstructionEvaluationSample(
                     id=sid,

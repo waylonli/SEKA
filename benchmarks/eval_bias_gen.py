@@ -42,7 +42,8 @@ def main(args: argparse.Namespace):
             amplify_neg=args.amplify_neg,
             feature_function=feature_fn,
             torch_dtype="auto",
-            device="auto"
+            device="auto",
+            attn_implementation="sdpa",
         )
         tokenizer = model.tok
             

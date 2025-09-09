@@ -229,12 +229,10 @@ class ProjectionBuilderBase(abc.ABC):
         """Compute and save traditional projection matrices"""
         pos_list, neg_list = [], []
         applied, skipped = [], []
-        lam_list = []
         norm_diffs = np.zeros((num_layers, n_kv))
 
         for L in tqdm(range(num_layers), desc="Computing Traditional Projectors", unit="layer"):
             Pp_heads, Pn_heads = [], []
-            lam_heads = []
             for h in range(n_kv):
                 H_mat = torch.cat(buf_H[L][h], 0).double().to(self.device)
                 Hp_mat = torch.cat(buf_Hp[L][h], 0).double().to(self.device)
@@ -255,9 +253,6 @@ class ProjectionBuilderBase(abc.ABC):
                 kn = (Sn.cumsum(0) / Sn.sum() < self.top_pct).sum().item() + 1
                 Pp = (Up[:, :kp] @ Up[:, :kp].T).to(torch.float)
                 Pn = (Un[:, kn:] @ Un[:, kn:].T).to(torch.float)
-                
-                # compute coefficient
-                lam = torch.sqrt(torch.tensor(H_mat.shape[1] / kp))
 
                 norm_value = (torch.norm(Hp_mat - Hn_mat) / len(Hp_mat)).item()
                 norm_diffs[L, h] = norm_value
@@ -272,16 +267,13 @@ class ProjectionBuilderBase(abc.ABC):
 
                 Pp_heads.append(Pp)
                 Pn_heads.append(Pn)
-                lam_heads.append(lam)
 
             pos_list.append(torch.stack(Pp_heads, dim=0))  # (H,d,d)
             neg_list.append(torch.stack(Pn_heads, dim=0))
-            lam_list.append(torch.stack(lam_heads, dim=0))
 
         # stack layers → (num_layers, H, d, d)
         pos_proj = torch.stack(pos_list, dim=0)
         neg_proj = torch.stack(neg_list, dim=0)
-        lam_layers = torch.stack(lam_list, dim=0)
 
         # save
         os.makedirs(output_dir, exist_ok=True)
@@ -293,8 +285,6 @@ class ProjectionBuilderBase(abc.ABC):
         torch.save({'layers': self.layers, 'proj': neg_proj.cpu()}, os.path.join(output_dir,
                                                                                  f"{model_name}_neg_proj_{self.feature}.pt") if self.feature else os.path.join(
             output_dir, f"{model_name}_neg_proj.pt"))
-        
-        torch.save(lam_layers, os.path.join(output_dir, f"{model_name}_pos_lambda.pt"))
 
         # summary
         print(f"\nTraditional Projection Summary:")

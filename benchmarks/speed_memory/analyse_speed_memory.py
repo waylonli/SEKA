@@ -8,6 +8,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from src.model import SEKALLM, AdaptiveSEKALLM
 from src.utils import encode_with_markers
 from pastalib.pasta import PASTA, read_head_config
+from transformers import pipeline
+import anchoring
 import json
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -24,7 +26,7 @@ def get_nvidia_smi_memory():
     except Exception:
         return -1
 
-def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, batch_size=10, max_new_tokens=60):
+def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, batch_size=1, max_new_tokens=60):
     mem_records = []
     speed_records = []
     answers = []
@@ -37,6 +39,7 @@ def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, bat
         torch.cuda.reset_peak_memory_stats()
         smi_start = get_nvidia_smi_memory()
         batch_start = time.perf_counter()
+        torch_mem_override = None  # Initialize for anchor mode
 
         if mode == "original":
             enc = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True).to(model.device)
@@ -94,6 +97,24 @@ def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, bat
                 pad_token_id=tokenizer.eos_token_id
             )
             decoded = out if isinstance(out, list) else [out]
+        elif mode == "anchor":
+            # Anchor batch processing with SPA pipeline
+            anchor_chunk = [anchor_prompts[start + i] for i in range(len(chunk))]
+            assert len(anchor_chunk) == batch_size
+            # Use SPA pipeline for batch processing
+            # Extract the anchored content (everything between <anchor> and </anchor>) as the anchor list
+            anchors = []
+            for prompt in anchor_chunk:
+                # Simple extraction of anchor content
+                if '<anchor>' in prompt and '</anchor>' in prompt:
+                    anchor_content = prompt.split('<anchor>')[1].split('</anchor>')[0]
+                    anchors.append(anchor_content.strip())
+
+            # Remove duplicates while preserving order
+            unique_anchors = list(dict.fromkeys(anchors))
+            
+            outputs = model(anchor_chunk, anchors=unique_anchors, max_new_tokens=max_new_tokens)
+            decoded = [output["generated_text"] for output in outputs]
         else:
             raise ValueError(f"Unknown model mode: {mode}")
 
@@ -101,6 +122,10 @@ def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, bat
         batch_time = time.perf_counter() - batch_start
         torch_mem = torch.cuda.max_memory_allocated() / 1024**2  # MB
         smi_mem = get_nvidia_smi_memory()
+
+        # Use override memory measurement for anchor mode
+        if mode == "anchor" and torch_mem_override is not None:
+            torch_mem = torch_mem_override
 
         if start > 0:
             mem_records.append({
@@ -111,7 +136,7 @@ def run_benchmark(name, get_model, tokenizer, prompts, highlighted_contexts, bat
             })
             speed_records.append(batch_time)
             answers.extend(decoded)
-            print(f"{name} | Batch {start//batch_size}: {batch_time:.2f}s, {torch_mem:.0f}MB torch, {smi_mem}MB smi")
+            # print(f"{name} | Batch {start//batch_size}: {batch_time:.2f}s, {torch_mem:.0f}MB torch, {smi_mem}MB smi")
 
     perf_df = pd.DataFrame(mem_records)
     perf_df["inference_time_sec"] = speed_records
@@ -141,27 +166,39 @@ def plot_comparison(dfs, names):
     plt.savefig("gpu_inference_profile_comparison.png")
     plt.show()
 
-# --- Data: Replace with your 100-sample path ---
+
 DATA_PATH = "data/lost_in_the_middle/30_total_documents/nq-open-30_total_documents_gold_at_0.jsonl"
 with open(DATA_PATH) as f:
     examples = [json.loads(line) for line in f][:110]
 
-def make_prompt_and_highlight(ex):
+def make_prompt_and_highlight(ex, anchor_mode=False):
     # Your prompt logic: This example assumes "question", "ctxs", and highlights context 4:25
-    def build_ctx(c, add_marker=True):
+    def build_ctx(c, add_marker=True, anchor_markers=False):
         ctx = "\n\n".join(f"{d['title']}\n{d['text']}" for d in c)
         if add_marker:
-            # marker version: for SEKA and PASTA highlight
-            ctx = "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[:4]) + \
-                  "\n\n**" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[4:25]) + "**" + \
-                  "\n\n" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[25:])
+            if anchor_markers:
+                # anchor version: use <anchor> markers
+                ctx = "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[:4]) + \
+                      "\n\n<anchor>" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[4:25]) + "</anchor>" + \
+                      "\n\n" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[25:])
+            else:
+                # marker version: for SEKA and PASTA highlight
+                ctx = "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[:4]) + \
+                      "\n\n**" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[4:25]) + "**" + \
+                      "\n\n" + "\n\n".join(f"{d['title']}\n{d['text']}" for d in c[25:])
         return ctx
-    prompt = f"Directly answer in one short phrase without any other word.\n\nContext:\n{build_ctx(ex['ctxs'], False)}\n\nQuestion: {ex['question']}\n\nAnswer:"
+    
+    if anchor_mode:
+        prompt = f"Directly answer in one short phrase without any other word.\n\nContext:\n{build_ctx(ex['ctxs'], True, True)}\n\nQuestion: {ex['question']}\n\nAnswer:"
+    else:
+        prompt = f"Directly answer in one short phrase without any other word.\n\nContext:\n{build_ctx(ex['ctxs'], False)}\n\nQuestion: {ex['question']}\n\nAnswer:"
+    
     highlight = "\n\n".join(f"{d['title']}\n{d['text']}" for d in ex["ctxs"][4:25])
     return prompt, highlight
 
 # Prepare
 prompts, highlighted_contexts = zip(*(make_prompt_and_highlight(ex) for ex in examples))
+anchor_prompts, anchor_highlighted_contexts = zip(*(make_prompt_and_highlight(ex, anchor_mode=True) for ex in examples))
 
 # --- Model settings (update these) ---
 MODEL_ID = "./pretrained/Qwen3-8B-Base"
@@ -177,12 +214,14 @@ SEKA_AMPLIFY_NEG = 0.0
 PASTA_HEAD_CONFIG = "pastalib/config/kv_head/synthetic_diff0.1/Qwen3-8B-Base_head_config.json"
 PASTA_ALPHA = 0.01
 PASTA_SCALE_POSITION = "exclude"  # or "your_value"
+# --- ANCHOR ---
+ANCHOR_STRENGTH = 20.0
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, padding_side="left")
 
 # Original model function
 def get_model_original():
-    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16).to(DEVICE).eval()
+    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, torch_dtype=torch.bfloat16, attn_implementation="sdpa").to(DEVICE).eval()
     return model, "original"
 
 # PASTA function
@@ -213,9 +252,13 @@ def get_model_seka():
 
 # Adaptive SEKA function
 def get_model_adaptive_seka():
+    # Load the expert config JSON
+    with open(ADASEKA_EXPERT_CONFIG, "r") as f:
+        expert_config = json.load(f)
+    
     adaptive_seka_model = AdaptiveSEKALLM(
         MODEL_ID,
-        expert_paths=ADASEKA_EXPERT_CONFIG,
+        expert_paths=expert_config,
         layers=SEKA_LAYERS,
         top_k_singular=5,
         combination_method="weighted_top_k",
@@ -225,17 +268,33 @@ def get_model_adaptive_seka():
     )
     return adaptive_seka_model, "adaptive_seka"
 
-# --- Run all three ---
+# Anchor function
+def get_model_anchor():
+    spa_pipe = pipeline(
+        "selective-prompt-anchoring",
+        model=MODEL_ID,
+        anchoring_strength=ANCHOR_STRENGTH,
+        modulated_by_prob=True,
+        use_attention_mask=True,
+        device_map="auto",
+        attn_implementation="sdpa",
+        torch_dtype=torch.bfloat16,
+    )
+    return spa_pipe, "anchor"
+
+# --- Run all methods ---
 print("\n--- ADAPTIVE SEKA ---")
 df_adaptive_seka, _ = run_benchmark("adaptive_seka", get_model_adaptive_seka, tokenizer, prompts, highlighted_contexts)
 print("\n--- SEKA ---")
 df_seka, _ = run_benchmark("seka", get_model_seka, tokenizer, prompts, highlighted_contexts)
-print("\n--- PASTA ---")
-df_pasta, _ = run_benchmark("pasta", get_model_pasta, tokenizer, prompts, highlighted_contexts)
+# print("\n--- PASTA ---")
+# df_pasta, _ = run_benchmark("pasta", get_model_pasta, tokenizer, prompts, highlighted_contexts)
+print("\n--- ANCHOR ---")
+df_anchor, _ = run_benchmark("anchor", get_model_anchor, tokenizer, anchor_prompts, anchor_highlighted_contexts)
 print("\n--- ORIGINAL MODEL ---")
 df_orig, _ = run_benchmark("original", get_model_original, tokenizer, prompts, highlighted_contexts)
 
 # --- Plot ---
-plot_comparison([df_orig, df_pasta, df_seka], ["Original", "PASTA", "SEKA"])
+plot_comparison([df_orig, df_pasta, df_seka, df_anchor, df_adaptive_seka], ["Original", "PASTA", "SEKA", "Anchor", "Adaptive SEKA"])
 
 print("✅ Finished benchmarking and plotting.")

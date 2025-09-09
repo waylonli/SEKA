@@ -21,7 +21,6 @@ def main(args: argparse.Namespace):
     pasta = None
 
     if args.seka:
-        args.prompt_idx = 3  # SEKA LLM does not support multiple prompt templates
         logger.info("For")
 
         if "_tanh" in args.pos:
@@ -53,7 +52,6 @@ def main(args: argparse.Namespace):
             logger.warning("SEKA LLM requires markers, setting add_marker to True.")
             args.add_marker = True
     elif args.adaptive_seka:
-        args.prompt_idx = 3  # Adaptive SEKA LLM does not support multiple prompt templates
         logger.info("Adaptive SEKA LLM does not support multiple prompt templates, setting prompt_idx to 3")
 
         if args.adaptive_expert_path is None:

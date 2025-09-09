@@ -213,7 +213,7 @@ class SEKALLM:
                 k_feat = phi(k_view, feature_function)  # (B, T, H, D)
                 k_sel = k_feat[m].to(Pp.dtype)  # (N_sel, H, D)
                 pos = torch.einsum('n h d, h d k -> n h k', k_sel, Pp)
-                
+
                 if Pn is not None:
                     neg = torch.einsum('n h d, h d k -> n h k', k_sel, Pn)
                     delta = (gp * pos + gn * neg) / 2

@@ -203,12 +203,12 @@ class PASTA(abc.ABC):
         for token_range in token_ranges:
             for bi, (ti,tj) in enumerate(token_range.tolist()):
                 if self.scale_position == "include":
-                    attention_mask[bi, head_idx, :, ti:tj] += self.scale_constant
+                    attention_mask[bi, head_idx, :, ti:tj] += self.scale_constant.to(attention_mask.device)
                 elif self.scale_position == "exclude":
-                    attention_mask[bi, head_idx, :, :ti] += self.scale_constant
-                    attention_mask[bi, head_idx, :, tj:input_len] += self.scale_constant
+                    attention_mask[bi, head_idx, :, :ti] += self.scale_constant.to(attention_mask.device)
+                    attention_mask[bi, head_idx, :, tj:input_len] += self.scale_constant.to(attention_mask.device)
                 elif self.scale_position == "generation":
-                    attention_mask[bi, head_idx, :, :input_len] += self.scale_constant 
+                    attention_mask[bi, head_idx, :, :input_len] += self.scale_constant.to(attention_mask.device)
                 else:
                     raise ValueError(f"Unexcepted {self.scale_position}.")
         if self.scale_position == "include":
