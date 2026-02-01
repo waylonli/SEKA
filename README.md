@@ -53,7 +53,7 @@ pip install -r requirements.txt
 ```
 ### 2. Prepare the datasets
 
-Grab the preprocessed datasets bundle from Hugging Face (<https://huggingface.co/datasets/waylonli/SEKA-datasets>) and unpack it at the repo root so the `data/` directory matches the paths used below.
+Grab the preprocessed datasets bundle from Hugging Face (<https://huggingface.co/datasets/waylonli/SEKA-datasets>), create a `data/` folder if needed, and unpack the archive into that directory.
 
 ### 3. Projections (SEKA & AdaSEKA)
 
