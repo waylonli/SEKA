@@ -156,3 +156,10 @@ Each run writes `metric_result.json` and `sweep_config.json` for traceability.
     url={https://openreview.net/forum?id=XfLvGIFmAN}
 }
 ```
+
+## Acknowledgements
+
+We build upon open-source contributions from prior steering and editing work:
+- [**SEA-LLM**](https://github.com/yfqiu-nlp/sea-llm) for the Spectral Editing of LLM Activations algorithm that inspired SEKA’s projection formulation.
+- [**PASTA**](https://github.com/QingruZhang/PASTA) for post-hoc editing baselines and evaluation utilities.
+- [**Selective Prompt Anchoring**](https://github.com/magic-YuanTian/Selective-Prompt-Anchoring) for anchor-style baselines we reproduce alongside SEKA.
