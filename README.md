@@ -66,7 +66,7 @@ pip install -r requirements.txt
    ```
 
 2. **AdaSEKA projections & config**
-   1. Build one expert projection per steering intent with the adaptive builder (save the SVD components that AdaSEKA consumes):
+   1. Build one expert projection per steering expert with the adaptive builder (save the SVD components that AdaSEKA consumes):
       ```bash
       python src/custom_builders/adaptive/synthetic_qa_builder_adaptive.py \
         --model pretrained/Qwen3-8B-Base \
@@ -77,12 +77,12 @@ pip install -r requirements.txt
         --top_pct 0.90 \
         --save-svd --svd-only
       ```
-      Repeat the same command for each intent you need (e.g. change `--output_dir` to `projections/adaptive/counterfact`, `.../pronchange`, etc.).
+      Repeat the same command for each expert you need (e.g. change `--output_dir` to `projections/adaptive/counterfact`, `.../pronchange`, etc.).
    2. Copy a template from `adaptive-seka-config/` and edit it to reference your tensors:
       ```bash
       cp adaptive-seka-config/Qwen3-8B/Qwen3-8B-mindiff-0.2.json adaseka_config.json
       ```
-      The config is a flat `{intent: projection_path}` mapping, e.g.
+      The config is a flat `{expert: projection_path}` mapping, e.g.
       ```json
       {
         "biasbios": "projections/adaptive/biasbios/Qwen3-8B-Base_0.2mindiff_pos_svd.pt",
@@ -91,7 +91,7 @@ pip install -r requirements.txt
         "synthetic": "projections/adaptive/synthetic/Qwen3-8B-Base_0.2mindiff_pos_svd.pt"
       }
       ```
-      These keys must match the intents you supply at inference time.
+      These keys must match the experts you supply at inference time.
    3. Enable AdaSEKA with `--adaptive-seka` and point to the config via `--adaptive-expert-path adaseka_config.json` when you launch an evaluation.
 
 ### 3. Run a benchmark
