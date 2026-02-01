@@ -4,7 +4,7 @@ This folder hosts the evaluation harness used to produce the **BiasBios**, **Cou
 
 ## 1. Prepare the datasets
 
-Download the preprocessed benchmark bundle from our Hugging Face release (placeholder: <https://huggingface.co/datasets/waylonli/SEKA-datasets>). The archive contains the ready-to-use files for BiasBios, CounterFact, PronChange, Lost-in-the-middle, and other datasets for expert projection generation. Simply unpack it into the repo’s `data/` directory so the paths resolve as written.
+Download the preprocessed benchmark bundle from our Hugging Face release (<https://huggingface.co/datasets/waylonli/SEKA-datasets>). The archive contains the ready-to-use files for BiasBios, CounterFact, PronChange, Lost-in-the-middle, and other datasets for expert projection generation. Simply unpack it into the repo’s `data/` directory so the paths resolve as written.
 
 ## 2. Obtain SEKA projection banks
 

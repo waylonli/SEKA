@@ -51,8 +51,11 @@ conda create -n seka python=3.10 -y
 conda activate seka
 pip install -r requirements.txt
 ```
+### 2. Prepare the datasets
 
-### 2. Projections (SEKA & AdaSEKA)
+Grab the preprocessed datasets bundle from Hugging Face (<https://huggingface.co/datasets/waylonli/SEKA-datasets>) and unpack it at the repo root so the `data/` directory matches the paths used below.
+
+### 3. Projections (SEKA & AdaSEKA)
 
 1. **SEKA projections** – Generate with the builders in `src/custom_builders/`, e.g.
    ```bash
@@ -94,7 +97,7 @@ pip install -r requirements.txt
       These keys must match the experts you supply at inference time.
    3. Enable AdaSEKA with `--adaptive-seka` and point to the config via `--adaptive-expert-path adaseka_config.json` when you launch an evaluation.
 
-### 3. Run a benchmark
+### 4. Run a benchmark
 
 Bracketed parameters in the examples below are placeholders—set `[AMP_POS]`, `[AMP_NEG]`, and `[ADAPTIVE_FACTOR]` to your chosen amplification strengths before running.
 
