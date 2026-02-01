@@ -4,11 +4,11 @@
 
 **Official implementation of the ICLR 2026 paper “Spectral Attention Steering for Prompt Highlighting” (SEKA & AdaSEKA)** by *Weixian Waylon Li, Yuchen Niu, Yongxin Yang, Keshuang Li, Tiejun Ma,* and *Shay B. Cohen*.
 
+---
+
 ## 📣 News
 - **[Feb 2026]** Initial codebase and datasets released.
-- **[Jan 2026]** SEKA & AdaSEKA accepted to **ICLR 2026**! 🎉
-
-SEKA amplifies task-relevant key vectors inside the attention mechanism via lightweight projections; AdaSEKA augments SEKA with a bank of experts and a learned selector so the model can adapt per input. This repository hosts the reference implementation, projection builders, evaluation scripts, and notebooks needed to reproduce the BiasBios, CounterFact, and PronChange experiments from the paper.
+- **[Jan 2026]** We're excited to announce that our paper has been accepted to **ICLR 2026**! 🎉
 
 ---
 - [Key ideas](#key-ideas)
@@ -26,6 +26,8 @@ SEKA amplifies task-relevant key vectors inside the attention mechanism via ligh
 
 - **SEKA** – Learn low-rank projections from synthetic QA pairs and inject them into attention keys during inference (via `SEKALLM`).
 - **AdaSEKA** – Maintain a small ensemble of SEKA experts plus an expert selector (`AdaptiveSEKALLM`) that chooses the best projection for each input.
+
+![SEKA and AdaSEKA overview](./figures/seka-figure.png)
 
 ## Repo layout
 
