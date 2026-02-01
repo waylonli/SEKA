@@ -152,7 +152,7 @@ class SEKALLM:
         P_pos = {layer: P_pos_stack[i].to(dtype) for i, layer in enumerate(sel_layers)}
 
         P_neg = None
-        if neg_pt and amplify_neg != 0.0:
+        if neg_pt:
             _, P_neg_stack = _load_proj(neg_pt, first_dev)
             if P_neg_stack.ndim != 4:
                 raise ValueError("Expected 4‑D neg_proj")

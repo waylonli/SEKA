@@ -1,3 +1,5 @@
+anchoring==0.1.0
+accelerate==1.11.0
 dataclasses_json==0.6.7
 datasets==3.5.1
 evaluation==0.0.2
