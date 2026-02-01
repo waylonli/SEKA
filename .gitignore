@@ -196,3 +196,5 @@ train
 profile_results
 *.sh
 *.pt
+
+notebook
