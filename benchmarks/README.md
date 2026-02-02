@@ -1,6 +1,6 @@
 # Benchmarks
 
-This folder hosts the evaluation harness used to produce the **BiasBios**, **CounterFact**, and **PronChange** results reported in *SEKA: Spectral Editing Key Amplification* (ICLR 2026). Follow the steps below to recreate the paper numbers end-to-end.
+This folder hosts the evaluation harness used to produce the **BiasBios**, **CounterFact**, and **PronChange** results reported in *Spectral Attention Steering for Prompt Highlighting* (ICLR 2026). Follow the steps below to recreate the paper numbers end-to-end.
 
 ## 1. Prepare the datasets
 
@@ -105,4 +105,4 @@ Each run emits `metric_result.json` (headline metrics) and task-specific logs in
 - **Negative amplitude behaviour** – If you do not wish to use a negative projection, omit the `--neg` flag entirely; passing the flag with `--amplify_neg 0.0` will attenuate the positive term.
 - **Cluster modules** – The example scripts assume CUDA modules named `cuda/12.x`; adapt to your HPC environment if necessary.
 
-That’s it! The commands above recreate the CounterFact, BiasBios, and PronChange numbers reported in *SEKA: Spectral Editing Key Amplification*.
+That’s it! The commands above recreate the CounterFact, BiasBios, and PronChange numbers reported in the paper.
