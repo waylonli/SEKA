@@ -148,12 +148,12 @@ Each run writes `metric_result.json` and `sweep_config.json` for traceability.
 
 ```bibtex
 @inproceedings{
-    li2026spectral,
-    title={Spectral Attention Steering for Prompt Highlighting},
-    author={Weixian Waylon Li and Yuchen Niu and Yongxin Yang and Keshuang Li and Tiejun Ma and Shay B. Cohen},
-    booktitle={The Fourteenth International Conference on Learning Representations},
-    year={2026},
-    url={https://openreview.net/forum?id=XfLvGIFmAN}
+  li2026spectral,
+  title={Spectral Attention Steering for Prompt Highlighting},
+  author={Weixian Waylon Li and Yuchen Niu and Yongxin Yang and Keshuang Li and Tiejun Ma and Shay B Cohen},
+  booktitle={The Fourteenth International Conference on Learning Representations},
+  year={2026},
+  url={https://openreview.net/forum?id=XfLvGIFmAN}
 }
 ```
 
