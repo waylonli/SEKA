@@ -4,7 +4,7 @@
 [![Hugging Face Papers](https://img.shields.io/badge/🤗%20Hugging%20Face-Paper-yellow)](https://huggingface.co/papers/2603.01281)
 [![Hugging Face Dataset](https://img.shields.io/badge/🤗%20Dataset-View%20on%20HF-yellow)](https://huggingface.co/datasets/waylonli/SEKA-datasets)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/waylonli/FINSABER?style=social)]()
+[![Stars](https://img.shields.io/github/stars/waylonli/SEKA?style=social)]()
 
 **Official implementation of the ICLR 2026 paper “Spectral Attention Steering for Prompt Highlighting” (SEKA & AdaSEKA)** by *Weixian Waylon Li, Yuchen Niu, Yongxin Yang, Keshuang Li, Tiejun Ma,* and *Shay B. Cohen*.
 
