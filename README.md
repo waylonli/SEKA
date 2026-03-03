@@ -1,6 +1,8 @@
 # [ICLR 2026] Spectral Attention Steering for Prompt Highlighting
 
-<!-- Badges go here  -->
+[![Arxiv link](https://img.shields.io/static/v1?label=arXiv&message=2603.01281&color=red&logo=arxiv)](https://arxiv.org/abs/2603.01281)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/waylonli/SEKA?style=social)]()
 
 **Official implementation of the ICLR 2026 paper “Spectral Attention Steering for Prompt Highlighting” (SEKA & AdaSEKA)** by *Weixian Waylon Li, Yuchen Niu, Yongxin Yang, Keshuang Li, Tiejun Ma,* and *Shay B. Cohen*.
 
